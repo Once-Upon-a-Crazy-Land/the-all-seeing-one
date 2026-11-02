@@ -2309,3 +2309,10 @@ select[data-economy-key="bonusRole"] {
 
 #server-rail-profile:hover { filter: brightness(1.12); }
 #server-rail-profile:focus-visible { outline: 2px solid var(--discord-accent); outline-offset: 3px; }
+
+.sidebar .module-status { margin-left: auto; flex-shrink: 0; color: var(--discord-faint); font-size: 10px; font-weight: 500; }
+.sidebar .module-status.is-enabled { color: #85c7a3; }
+@media (max-width: 750px) {
+  .sidebar .tab { flex-direction: column; gap: 3px; }
+  .sidebar .module-status { margin-left: 0; font-size: 9px; }
+}

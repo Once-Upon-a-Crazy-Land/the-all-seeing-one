@@ -239,7 +239,7 @@ app.get("/api/guilds/:guildId/settings", requireUser, canManage, (req, res) => {
     prices: db.prepare(`SELECT p.id,p.system_id AS systemId,p.amount,p.join_operator AS operator,s.name,s.currency_symbol AS currencySymbol,s.enabled AS systemEnabled,s.deleted AS systemDeleted
       FROM economy_shop_prices p JOIN economy_systems s ON s.id=p.system_id WHERE p.item_id=? ORDER BY p.id`).all(item.id)
   }));
-  res.json({ premium: premiumStatus(guild.id), systems: detailedSystems, economySystems: economySystems.map(system => ({ ...system, config: JSON.parse(system.config_json || "{}") })), economySharedNames, channels, ruleChannels, roles, emojis, economy, shopItems, memberCount: guild.memberCount });
+  res.json({ moderationEnabled: !!moderationSettings(guild.id).enabled, premium: premiumStatus(guild.id), systems: detailedSystems, economySystems: economySystems.map(system => ({ ...system, config: JSON.parse(system.config_json || "{}") })), economySharedNames, channels, ruleChannels, roles, emojis, economy, shopItems, memberCount: guild.memberCount });
 });
 
 app.put("/api/guilds/:guildId/economy", requireUser, canManage, async (req, res) => {
