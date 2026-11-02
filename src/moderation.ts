@@ -48,7 +48,11 @@ export async function handleHoneypotMessage(message: import("discord.js").Messag
   try {
     const member = await guild.members.fetch(message.author.id);
     if (member.id === guild.ownerId || member.permissions.has(P.Administrator) || member.permissions.has(P.BanMembers)
-      || [settings.admin_role_id, settings.moderator_role_id, settings.honeypot_exempt_role_ids].flatMap(ids => (ids || "").split(",")).some(id => id && member.roles.cache.has(id))) return false;
+      || [settings.admin_role_id, settings.moderator_role_id, settings.honeypot_exempt_role_ids].flatMap(ids => (ids || "").split(",")).some(id => id && member.roles.cache.has(id))) {
+      try { await message.delete(); }
+      catch { throw new Error("Could not delete honeypot message. Check bot Manage Messages permission."); }
+      return true;
+    }
     const me = await guild.members.fetchMe();
     if (!me.permissions.has(P.BanMembers) || !member.bannable) throw new Error("Check bot Ban Members permission and role order.");
     try {
