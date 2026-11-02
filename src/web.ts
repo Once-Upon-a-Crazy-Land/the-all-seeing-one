@@ -148,7 +148,8 @@ app.put("/api/guilds/:guildId/moderation", requireUser, canManage, async (req, r
     const current = moderationSettings(guild.id);
     const adminRoleId = [...new Set(String(req.body.adminRoleId ?? current.admin_role_id ?? "").split(",").map(id => id.trim()).filter(Boolean))].join(",");
     const moderatorRoleId = [...new Set(String(req.body.moderatorRoleId ?? current.moderator_role_id ?? "").split(",").map(id => id.trim()).filter(Boolean))].join(",");
-    for (const id of [adminRoleId, moderatorRoleId].flatMap(ids => ids.split(","))) {
+    const honeypotExemptRoleIds = [...new Set(String(req.body.honeypotExemptRoleIds ?? current.honeypot_exempt_role_ids ?? "").split(",").map(id => id.trim()).filter(Boolean))].join(",");
+    for (const id of [adminRoleId, moderatorRoleId, honeypotExemptRoleIds].flatMap(ids => ids.split(","))) {
       if (!id) continue;
       const role = guild.roles.cache.get(id);
       if (!role || role.id === guild.id || role.managed) return res.status(400).json({ error: "Choose an available server role" });
@@ -203,7 +204,7 @@ app.put("/api/guilds/:guildId/moderation", requireUser, canManage, async (req, r
       catch { return res.status(400).json({ error: "Could not set up the moderation webhook. The bot needs Manage Webhooks in the log channel." }); }
     }
     moderationSettings(guild.id);
-    db.prepare("UPDATE moderation_settings SET enabled=?,log_channel_id=?,warning_rules=?,admin_role_id=?,moderator_role_id=?,honeypot_channel_id=? WHERE guild_id=?").run(req.body.enabled ? 1 : 0, channelId || null, JSON.stringify(rules), adminRoleId || null, moderatorRoleId || null, honeypotChannelId || null, guild.id);
+    db.prepare("UPDATE moderation_settings SET enabled=?,log_channel_id=?,warning_rules=?,admin_role_id=?,moderator_role_id=?,honeypot_channel_id=?,honeypot_exempt_role_ids=? WHERE guild_id=?").run(req.body.enabled ? 1 : 0, channelId || null, JSON.stringify(rules), adminRoleId || null, moderatorRoleId || null, honeypotChannelId || null, honeypotExemptRoleIds || null, guild.id);
     res.json({ settings: moderationSettings(guild.id), cases: moderationCases(guild.id) });
   } catch (error) { next(error); }
 });

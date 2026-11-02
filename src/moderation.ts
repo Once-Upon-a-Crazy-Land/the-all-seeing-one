@@ -11,7 +11,7 @@ export type WarningRule = { warnings: number; action: "timeout" | "kick" | "ban"
 if (!(db.prepare("PRAGMA table_info(moderation_settings)").all() as Array<{ name: string }>).some(column => column.name === "warning_rules")) {
   db.exec("ALTER TABLE moderation_settings ADD COLUMN warning_rules TEXT NOT NULL DEFAULT '[]'");
 }
-for (const column of ["admin_role_id", "moderator_role_id", "honeypot_channel_id"]) {
+for (const column of ["admin_role_id", "moderator_role_id", "honeypot_channel_id", "honeypot_exempt_role_ids"]) {
   if (!(db.prepare("PRAGMA table_info(moderation_settings)").all() as Array<{ name: string }>).some(entry => entry.name === column)) db.exec(`ALTER TABLE moderation_settings ADD COLUMN ${column} TEXT`);
 }
 export function validateWarningRules(value: unknown): WarningRule[] {
@@ -33,7 +33,7 @@ function activeWarningCount(guildId: string, userId: string) {
 }
 export function moderationSettings(guildId: string) {
   db.prepare("INSERT OR IGNORE INTO moderation_settings (guild_id) VALUES (?)").run(guildId);
-  return db.prepare("SELECT * FROM moderation_settings WHERE guild_id=?").get(guildId) as { enabled: number; honeypot_channel_id: string | null; log_channel_id: string | null; warning_rules: string; admin_role_id: string | null; moderator_role_id: string | null };
+  return db.prepare("SELECT * FROM moderation_settings WHERE guild_id=?").get(guildId) as { enabled: number; honeypot_exempt_role_ids: string | null; honeypot_channel_id: string | null; log_channel_id: string | null; warning_rules: string; admin_role_id: string | null; moderator_role_id: string | null };
 }
 const honeypotInFlight = new Set<string>();
 export async function handleHoneypotMessage(message: import("discord.js").Message): Promise<boolean> {
@@ -48,7 +48,7 @@ export async function handleHoneypotMessage(message: import("discord.js").Messag
   try {
     const member = await guild.members.fetch(message.author.id);
     if (member.id === guild.ownerId || member.permissions.has(P.Administrator) || member.permissions.has(P.BanMembers)
-      || [settings.admin_role_id, settings.moderator_role_id].flatMap(ids => (ids || "").split(",")).some(id => id && member.roles.cache.has(id))) return false;
+      || [settings.admin_role_id, settings.moderator_role_id, settings.honeypot_exempt_role_ids].flatMap(ids => (ids || "").split(",")).some(id => id && member.roles.cache.has(id))) return false;
     const me = await guild.members.fetchMe();
     if (!me.permissions.has(P.BanMembers) || !member.bannable) throw new Error("Check bot Ban Members permission and role order.");
     try {

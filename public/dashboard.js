@@ -239,7 +239,7 @@ function openSelectPopup(select){
   const isContentType=select.id==='content-type'||select.id==='economy-content-type';
   const isEconomyContentType=select.id==='economy-content-type';
   const isBonusRole=select.dataset.economyKey==='bonusRole';
-  const isModerationRole=['moderation-admin-role','moderation-moderator-role'].includes(select.id);
+  const isModerationRole=['moderation-admin-role','moderation-moderator-role','honeypot-exempt-roles'].includes(select.id);
   const isRoleMulti=isBonusRole||isModerationRole;
   const isSearchable=select.id==='money-audit-channel'||isRoleMulti;
   const system=isContentType&&!isEconomyContentType&&state.data?.systems.find(item=>item.id===state.systemId);
@@ -639,7 +639,7 @@ function scheduleModerationSave(){
   clearTimeout(moderationSaveTimer);moderationSaveTimer=null;
   const version=++moderationEditVersion;
   try{
-    moderationPendingSave={guildId:state.guildId,version,body:{enabled:$('#moderation-enabled').checked,logChannelId:$('#moderation-log-channel').value,honeypotChannelId:$('#honeypot-channel').value,adminRoleId:$('#moderation-admin-role').value,moderatorRoleId:$('#moderation-moderator-role').value,warningRules:collectWarningRules()}};
+    moderationPendingSave={guildId:state.guildId,version,body:{enabled:$('#moderation-enabled').checked,logChannelId:$('#moderation-log-channel').value,honeypotChannelId:$('#honeypot-channel').value,honeypotExemptRoleIds:$('#honeypot-exempt-roles').value,adminRoleId:$('#moderation-admin-role').value,moderatorRoleId:$('#moderation-moderator-role').value,warningRules:collectWarningRules()}};
     moderationSaveTimer=setTimeout(flushModerationSave,650);
   }catch(error){moderationPendingSave=null;showSaveToast(error.message,true)}
 }
@@ -685,6 +685,7 @@ function collectWarningRules(){
 $('#add-warning-rule').onclick=()=>{addWarningRule();scheduleModerationSave()};
 $('#moderation-enabled').onchange=scheduleModerationSave;
 $('#honeypot-channel').onchange=scheduleModerationSave;
+$('#honeypot-exempt-roles').onchange=scheduleModerationSave;
 $('#moderation-log-channel').onchange=scheduleModerationSave;
 $('#moderation-admin-role').onchange=scheduleModerationSave;
 $('#moderation-moderator-role').onchange=scheduleModerationSave;
@@ -692,7 +693,7 @@ $('#warning-rules').addEventListener('input',scheduleModerationSave);
 $('#warning-rules').addEventListener('change',scheduleModerationSave);
 function renderModeration(data){
   
-  for(const [selector,key] of [['#moderation-admin-role','admin_role_id'],['#moderation-moderator-role','moderator_role_id']]){
+  for(const [selector,key] of [['#moderation-admin-role','admin_role_id'],['#moderation-moderator-role','moderator_role_id'],['#honeypot-exempt-roles','honeypot_exempt_role_ids']]){
     const select=$(selector);select.innerHTML='<option value="">Not set</option>'+state.data.roles.map(role=>`<option value="${role.id}">@ ${escapeHtml(role.name)}</option>`).join('');syncBonusRoleSelect(select,data.settings[key]||'');
   }
   $('#moderation-enabled').checked=!!data.settings.enabled;

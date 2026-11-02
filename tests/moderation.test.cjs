@@ -197,6 +197,11 @@ test('honeypot softbans once, skips exempt accounts, and records failed unban as
   assert.equal(await h.api.handleHoneypotMessage({ ...message, author: { ...h.user, bot: true } }), false);
   assert.equal(await h.api.handleHoneypotMessage({ ...message, webhookId: 'webhook' }), false);
   assert.equal(h.events.filter(e => e[0] === 'dm').length, 0);
+  h.db.prepare('UPDATE moderation_settings SET honeypot_exempt_role_ids=?').run('trusted,member');
+  member.roles.cache.set('member', {});
+  assert.equal(await h.api.handleHoneypotMessage(message), false);
+  assert.equal(h.events.length, 0);
+  member.roles.cache.clear();
   await Promise.all([h.api.handleHoneypotMessage(message), h.api.handleHoneypotMessage(message)]);
   assert.deepEqual(h.events.filter(e => ['dm','ban','unban'].includes(e[0])).map(e => e[0]), ['dm','ban','unban']);
   const dm = h.events.find(e => e[0] === 'dm')[1];
