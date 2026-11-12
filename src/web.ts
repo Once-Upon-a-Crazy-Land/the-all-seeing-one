@@ -63,6 +63,11 @@ function leaderboardProfile(userId: string) {
   return value;
 }
 
+app.get("/invite", (_req, res) => {
+  const query = new URLSearchParams({ client_id: config.clientId, permissions: "268504064", scope: "bot applications.commands" });
+  res.redirect(`https://discord.com/oauth2/authorize?${query}`);
+});
+
 app.get("/auth/discord", (req, res) => {
   const state = crypto.randomBytes(24).toString("hex");
   req.session!.oauthState = state;
