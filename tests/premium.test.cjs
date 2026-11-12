@@ -11,7 +11,8 @@ function setup(){
  const requests=[];let status='ACTIVE',signature='SUCCESS',custom='g',plan='P-PLAN';
  const context={exports:{},require:name=>name==='node:crypto'?require('node:crypto'):name==='./config.js'?{config}:{db},Buffer,URL,Date,AbortSignal,console,setInterval:()=>({unref(){}}),fetch:async(url,options)=>{
   requests.push({url,options});
-  let body=url.endsWith('/token')?{access_token:'token'}:url.endsWith('verify-webhook-signature')?{verification_status:signature}:url.endsWith('/v1/billing/subscriptions')?{id:'I-SUB',links:[{rel:'approve',href:'https://www.sandbox.paypal.com/approve'}]}:{id:'I-SUB',status,plan_id:plan,custom_id:custom,billing_info:{next_billing_time:new Date(Date.now()+86400000).toISOString()}};
+  const approvalHost=config.paypal.environment==='live'?'www.paypal.com':'www.sandbox.paypal.com';
+  let body=url.endsWith('/token')?{access_token:'token'}:url.endsWith('verify-webhook-signature')?{verification_status:signature}:url.endsWith('/v1/billing/subscriptions')?{id:'I-SUB',links:[{rel:'approve',href:'https://'+approvalHost+'/approve'}]}:{id:'I-SUB',status,plan_id:plan,custom_id:custom,billing_info:{next_billing_time:new Date(Date.now()+86400000).toISOString()}};
   return {ok:true,json:async()=>body};
  }};
  vm.createContext(context);vm.runInContext(ts.transpileModule(fs.readFileSync('src/premium.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,context);
@@ -39,6 +40,26 @@ test('verified webhooks reconcile current state and reject forged events',async(
 });
 test('concurrent checkout requests reuse pending subscription',async()=>{
  const h=setup();h.setStatus('APPROVAL_PENDING');const results=await Promise.all([h.api.createPremiumSubscription('g','u','https://example.com'),h.api.createPremiumSubscription('g','u','https://example.com')]);assert.equal(results[0].subscriptionId,results[1].subscriptionId);assert.equal(h.requests.filter(r=>r.url.endsWith('/v1/billing/subscriptions')).length,1);h.db.close();
+});
+
+test('live checkout and reconciliation skip stored sandbox subscriptions', async () => {
+ const h = setup();
+ h.db.prepare(`INSERT INTO premium_subscriptions
+  (subscription_id,guild_id,user_id,plan_id,status,approval_url,valid_until)
+  VALUES ('I-OLD','g','u','P-PLAN','ACTIVE','https://www.sandbox.paypal.com/approve',?)`).run(Date.now()+86400000);
+ assert.equal(h.api.premiumStatus('g').active, true);
+
+ h.config.paypal.environment = 'live';
+ assert.equal(h.api.premiumStatus('g').active, false);
+ await assert.rejects(h.api.activatePremiumSubscription('I-OLD','g','u'), /Subscription not found/);
+ await h.api.syncSubscription('I-OLD');
+ assert.equal(h.requests.length, 0);
+
+ const order = await h.api.createPremiumSubscription('g','u','https://example.com');
+ assert.equal(order.approvalUrl, 'https://www.paypal.com/approve');
+ assert.equal(h.requests.filter(request => request.url.includes('/I-OLD')).length, 0);
+ assert.equal(h.db.prepare('SELECT COUNT(*) AS count FROM premium_subscriptions').get().count, 2);
+ h.db.close();
 });
 
 test('shop limits preserve items and allow choosing replacement listings after premium expires',async()=>{

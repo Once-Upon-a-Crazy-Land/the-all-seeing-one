@@ -23,8 +23,17 @@ export function checkoutAvailable() {
   const p=config.paypal;
   return !!(p.clientId && p.clientSecret && p.webhookId && /^(sandbox|live)$/.test(p.environment) && /^P-[A-Z0-9]+$/.test(p.planId));
 }
+
+function approvalOrigin() {
+  return config.paypal.environment === "live" ? "https://www.paypal.com" : "https://www.sandbox.paypal.com";
+}
+
+function approvalUrlPattern() {
+  return approvalOrigin() + "/%";
+}
+
 export function premiumStatus(guildId: string) {
-  const active=!!db.prepare("SELECT 1 FROM premium_subscriptions WHERE guild_id=? AND status='ACTIVE' AND valid_until>? LIMIT 1").get(guildId,Date.now());
+  const active=!!db.prepare("SELECT 1 FROM premium_subscriptions WHERE guild_id=? AND approval_url LIKE ? AND status='ACTIVE' AND valid_until>? LIMIT 1").get(guildId,approvalUrlPattern(),Date.now());
   return { active, systemLimit: active ? 10 : 2, shopItemLimit: active ? 100 : 20, checkoutAvailable: checkoutAvailable() };
 }
 
@@ -74,7 +83,7 @@ async function serialized<T>(key: string, task: () => Promise<T>): Promise<T> {
 export async function createPremiumSubscription(guildId: string, userId: string, origin: string) {
   return serialized(guildId,async()=>{
     if(premiumStatus(guildId).active)throw new Error("This server already has premium");
-    const existing=db.prepare("SELECT * FROM premium_subscriptions WHERE guild_id=? AND status IN ('ACTIVE','APPROVAL_PENDING','APPROVED','SUSPENDED') ORDER BY created_at DESC LIMIT 1").get(guildId) as any;
+    const existing=db.prepare("SELECT * FROM premium_subscriptions WHERE guild_id=? AND approval_url LIKE ? AND status IN ('ACTIVE','APPROVAL_PENDING','APPROVED','SUSPENDED') ORDER BY created_at DESC LIMIT 1").get(guildId,approvalUrlPattern()) as any;
     if(existing){
       await syncSubscription(existing.subscription_id);
       const updated=db.prepare("SELECT status FROM premium_subscriptions WHERE subscription_id=?").get(existing.subscription_id) as any;
@@ -85,15 +94,15 @@ export async function createPremiumSubscription(guildId: string, userId: string,
       plan_id:config.paypal.planId,custom_id:guildId,
       application_context:{shipping_preference:"NO_SHIPPING",user_action:"SUBSCRIBE_NOW",return_url:origin+"/dashboard.html?premium=return&guild="+guildId,cancel_url:origin+"/dashboard.html?premium=cancel&guild="+guildId}
     },crypto.randomUUID());
-    const approvalUrl=result.links?.find((link:any)=>link.rel==='approve')?.href;
-    const approval=new URL(approvalUrl);
-    if(!/^I-[A-Z0-9]+$/.test(result.id)||approval.protocol!=="https:"||!["www.paypal.com","www.sandbox.paypal.com"].includes(approval.hostname))throw new Error("Invalid PayPal response");
+    const approval=new URL(result.links?.find((link:any)=>link.rel==='approve')?.href);
+    if(!/^I-[A-Z0-9]+$/.test(result.id)||approval.origin!==approvalOrigin()||approval.username||approval.password)throw new Error("Invalid PayPal response");
+    const approvalUrl=approval.href;
     db.prepare("INSERT INTO premium_subscriptions(subscription_id,guild_id,user_id,plan_id,approval_url) VALUES(?,?,?,?,?)").run(result.id,guildId,userId,config.paypal.planId,approvalUrl);
     return {subscriptionId:result.id,approvalUrl};
   });
 }
 export async function syncSubscription(subscriptionId: string) {
-  const stored=db.prepare("SELECT * FROM premium_subscriptions WHERE subscription_id=?").get(subscriptionId) as any;
+  const stored=db.prepare("SELECT * FROM premium_subscriptions WHERE subscription_id=? AND approval_url LIKE ?").get(subscriptionId,approvalUrlPattern()) as any;
   if(!stored)return;
   const result=await paypal("/v1/billing/subscriptions/"+encodeURIComponent(subscriptionId));
   if(result.id!==subscriptionId||result.plan_id!==stored.plan_id||result.custom_id!==stored.guild_id)throw new PayPalSubscriptionMismatch("Subscription mismatch");
@@ -104,10 +113,10 @@ export async function syncSubscription(subscriptionId: string) {
 }
 export async function activatePremiumSubscription(subscriptionId: string,guildId: string,userId: string) {
   if(!subscriptionId){
-    const pending=db.prepare("SELECT subscription_id FROM premium_subscriptions WHERE guild_id=? AND user_id=? ORDER BY created_at DESC LIMIT 1").get(guildId,userId) as any;
+    const pending=db.prepare("SELECT subscription_id FROM premium_subscriptions WHERE guild_id=? AND user_id=? AND approval_url LIKE ? ORDER BY created_at DESC LIMIT 1").get(guildId,userId,approvalUrlPattern()) as any;
     subscriptionId=pending?.subscription_id || "";
   }
-  const stored=db.prepare("SELECT 1 FROM premium_subscriptions WHERE subscription_id=? AND guild_id=? AND user_id=?").get(subscriptionId,guildId,userId);
+  const stored=db.prepare("SELECT 1 FROM premium_subscriptions WHERE subscription_id=? AND guild_id=? AND user_id=? AND approval_url LIKE ?").get(subscriptionId,guildId,userId,approvalUrlPattern());
   if(!stored||!/^I-[A-Z0-9]+$/.test(subscriptionId))throw new Error("Subscription not found");
   await serialized(guildId,()=>syncSubscription(subscriptionId));
   const status=premiumStatus(guildId);
@@ -131,7 +140,7 @@ export function startPremiumSync() {
     if(running||!checkoutAvailable())return;
     running=true;
     try {
-      const rows=db.prepare("SELECT subscription_id,guild_id FROM premium_subscriptions WHERE status IN ('ACTIVE','APPROVED','SUSPENDED','APPROVAL_PENDING')").all() as Array<{subscription_id:string;guild_id:string}>;
+      const rows=db.prepare("SELECT subscription_id,guild_id FROM premium_subscriptions WHERE approval_url LIKE ? AND status IN ('ACTIVE','APPROVED','SUSPENDED','APPROVAL_PENDING')").all(approvalUrlPattern()) as Array<{subscription_id:string;guild_id:string}>;
       for (const row of rows) {
         try {
           await serialized(row.guild_id, () => syncSubscription(row.subscription_id));
