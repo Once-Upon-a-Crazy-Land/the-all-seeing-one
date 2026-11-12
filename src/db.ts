@@ -2,15 +2,19 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
+import { checkDatabaseFile, markDatabaseInitialized } from "./database-backups.js";
 
 fs.mkdirSync(path.dirname(config.databasePath), { recursive: true });
+const persistent = !!process.env.RAILWAY_VOLUME_MOUNT_PATH;
+checkDatabaseFile(config.databasePath, persistent);
 export const db = new DatabaseSync(config.databasePath);
 db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+if (persistent && !fs.existsSync(`${config.databasePath}.initialized`)) markDatabaseInitialized(config.databasePath, true);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS guild_settings (
     guild_id TEXT PRIMARY KEY,
-    enabled INTEGER NOT NULL DEFAULT 1,
+    enabled INTEGER NOT NULL DEFAULT 0,
     min_xp INTEGER NOT NULL DEFAULT 15,
     max_xp INTEGER NOT NULL DEFAULT 25,
     cooldown_seconds INTEGER NOT NULL DEFAULT 60,
@@ -219,6 +223,11 @@ if (!systemColumns.some(column => column.name === "announce_destination")) {
 }
 
 const guildSettingColumns = db.prepare("PRAGMA table_info(guild_settings)").all() as Array<{ name: string }>;
+for (const name of ["levels_module_enabled", "economy_module_enabled"]) {
+  if (!guildSettingColumns.some(column => column.name === name)) {
+    db.exec(`ALTER TABLE guild_settings ADD COLUMN ${name} INTEGER NOT NULL DEFAULT 1`);
+  }
+}
 if (!guildSettingColumns.some(column => column.name === "currency_symbol")) {
   db.exec("ALTER TABLE guild_settings ADD COLUMN currency_symbol TEXT NOT NULL DEFAULT '<:alonecrazygears:1553368950082113536>'");
 }
@@ -270,10 +279,25 @@ export type GuildSettings = {
   cooldown_seconds: number; announce_channel_id: string | null; announce_message: string; currency_symbol: string;
   starting_balance: number; max_cash_balance: number; max_bank_balance: number; money_audit_channel_id: string | null;
   economy_config: string;
+  levels_module_enabled: number; economy_module_enabled: number;
 };
 
+export type SystemModule = "levels" | "economy";
+const moduleColumns = { levels: "levels_module_enabled", economy: "economy_module_enabled" } as const;
+
+export function systemModuleEnabled(guildId: string, module: SystemModule): boolean {
+  const row = db.prepare(`SELECT ${moduleColumns[module]} AS enabled FROM guild_settings WHERE guild_id=?`).get(guildId);
+  return row?.enabled !== 0;
+}
+
+export function setSystemModuleEnabled(guildId: string, module: SystemModule, enabled: boolean): void {
+  const column = moduleColumns[module];
+  db.prepare(`INSERT INTO guild_settings (guild_id, ${column}) VALUES (?, ?)
+    ON CONFLICT(guild_id) DO UPDATE SET ${column}=excluded.${column}`).run(guildId, Number(enabled));
+}
+
 export function settingsFor(guildId: string): GuildSettings {
-  db.prepare("INSERT OR IGNORE INTO guild_settings (guild_id) VALUES (?)").run(guildId);
+  db.prepare("INSERT OR IGNORE INTO guild_settings (guild_id, enabled) VALUES (?, 0)").run(guildId);
   return db.prepare("SELECT * FROM guild_settings WHERE guild_id = ?").get(guildId) as GuildSettings;
 }
 
@@ -302,6 +326,15 @@ export function ensureDefaultSystem(guildId: string): number {
   } catch (error) { db.exec("ROLLBACK"); throw error; }
 }
 
+db.exec(`UPDATE economy_systems SET config_json=json_set(config_json,'$.activityCommandsEnabled',CASE WHEN id=(SELECT MIN(e.id) FROM economy_systems e WHERE e.guild_id=economy_systems.guild_id AND e.deleted=0) THEN json('true') ELSE json('false') END) WHERE json_type(config_json,'$.activityCommandsEnabled') IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS economy_activity_owner ON economy_systems(guild_id) WHERE deleted=0 AND json_extract(config_json,'$.activityCommandsEnabled') IN (1,'true');`);
+
+export const economyTransactionDefaults = {
+  transferFee: 0, transferLimit: 10000, minimumTransfer: 1, paymentsEnabled: true,
+  interestRate: 1, interestInterval: 24, maximumInterest: 500,
+  withdrawalFee: 0, wealthTax: 0, taxThreshold: 10000
+};
+
 export function ensureDefaultEconomySystem(guildId: string): number {
   const existing = db.prepare("SELECT id FROM economy_systems WHERE guild_id=? AND deleted=0 ORDER BY id LIMIT 1").get(guildId) as { id: number } | undefined;
   if (existing) return existing.id;
@@ -309,8 +342,8 @@ export function ensureDefaultEconomySystem(guildId: string): number {
   db.exec("BEGIN");
   try {
     const created = db.prepare(`INSERT INTO economy_systems
-      (guild_id,name,currency_symbol,starting_balance,max_cash_balance,max_bank_balance,config_json)
-      VALUES (?,'Main economy',?,?,?,?,?)`).run(guildId, old.currency_symbol, old.starting_balance, old.max_cash_balance, old.max_bank_balance, old.economy_config);
+      (guild_id,name,enabled,currency_symbol,starting_balance,max_cash_balance,max_bank_balance,config_json)
+      VALUES (?,'Main economy',0,?,?,?,?,?)`).run(guildId, old.currency_symbol, old.starting_balance, old.max_cash_balance, old.max_bank_balance, JSON.stringify({ ...economyTransactionDefaults, ...JSON.parse(old.economy_config || "{}"), activityCommandsEnabled: true }));
     const id = Number(created.lastInsertRowid);
     db.prepare(`INSERT OR IGNORE INTO economy_balances (system_id,user_id,username,cash,bank,created_at)
       SELECT ?,user_id,username,cash,bank,created_at FROM economy_accounts WHERE guild_id=?`).run(id, guildId);

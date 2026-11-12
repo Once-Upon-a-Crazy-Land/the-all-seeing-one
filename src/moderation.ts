@@ -2,7 +2,7 @@ import { sendLog } from "./log-webhooks.js";
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ButtonInteraction, StringSelectMenuBuilder, StringSelectMenuInteraction, ChatInputCommandInteraction, ModalSubmitInteraction, ModalBuilder, LabelBuilder, UserSelectMenuBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder, ContainerBuilder, SeparatorBuilder, MessageFlags, PermissionFlagsBits as P, SlashCommandBuilder, TextDisplayBuilder } from "discord.js";
 import { db } from "./db.js";
 
-db.exec(`CREATE TABLE IF NOT EXISTS moderation_settings (guild_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1, log_channel_id TEXT);
+db.exec(`CREATE TABLE IF NOT EXISTS moderation_settings (guild_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0, log_channel_id TEXT);
 CREATE TABLE IF NOT EXISTS moderation_cases (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, user_id TEXT, moderator_id TEXT NOT NULL, action TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL, cleared INTEGER NOT NULL DEFAULT 0);`);
 if (!(db.prepare("PRAGMA table_info(moderation_cases)").all() as Array<{ name: string }>).some(column => column.name === "message_links")) {
   db.exec("ALTER TABLE moderation_cases ADD COLUMN message_links TEXT NOT NULL DEFAULT '[]'");
@@ -32,7 +32,7 @@ function activeWarningCount(guildId: string, userId: string) {
   return (db.prepare("SELECT COUNT(*) AS count FROM moderation_cases WHERE guild_id=? AND user_id=? AND action='warn' AND cleared=0").get(guildId, userId) as { count: number }).count;
 }
 export function moderationSettings(guildId: string) {
-  db.prepare("INSERT OR IGNORE INTO moderation_settings (guild_id) VALUES (?)").run(guildId);
+  db.prepare("INSERT OR IGNORE INTO moderation_settings (guild_id, enabled) VALUES (?, 0)").run(guildId);
   return db.prepare("SELECT * FROM moderation_settings WHERE guild_id=?").get(guildId) as { enabled: number; honeypot_exempt_role_ids: string | null; honeypot_channel_id: string | null; log_channel_id: string | null; warning_rules: string; admin_role_id: string | null; moderator_role_id: string | null };
 }
 const honeypotInFlight = new Set<string>();

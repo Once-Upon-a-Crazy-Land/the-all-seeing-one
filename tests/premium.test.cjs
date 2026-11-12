@@ -40,3 +40,16 @@ test('verified webhooks reconcile current state and reject forged events',async(
 test('concurrent checkout requests reuse pending subscription',async()=>{
  const h=setup();h.setStatus('APPROVAL_PENDING');const results=await Promise.all([h.api.createPremiumSubscription('g','u','https://example.com'),h.api.createPremiumSubscription('g','u','https://example.com')]);assert.equal(results[0].subscriptionId,results[1].subscriptionId);assert.equal(h.requests.filter(r=>r.url.endsWith('/v1/billing/subscriptions')).length,1);h.db.close();
 });
+
+test('shop limits preserve items and allow choosing replacement listings after premium expires',async()=>{
+ const h=setup();h.db.exec("CREATE TABLE economy_shop_items(id INTEGER PRIMARY KEY,guild_id TEXT,listed INTEGER,deactivation_reason TEXT); INSERT INTO economy_shop_items VALUES(999,'other',1,NULL)");
+ const insert=h.db.prepare("INSERT INTO economy_shop_items VALUES(?,'g',1,NULL)");for(let id=1;id<=100;id++)insert.run(id);
+ assert.equal(h.api.premiumStatus('g').shopItemLimit,20);
+ await h.api.createPremiumSubscription('g','u','https://example.com');await h.api.activatePremiumSubscription('I-SUB','g','u');assert.equal(h.api.enforceShopItemLimit('g'),100);
+ assert.equal(h.db.prepare("SELECT COUNT(*) n FROM economy_shop_items WHERE guild_id='g' AND listed=1").get().n,100);
+ h.db.prepare('UPDATE premium_subscriptions SET valid_until=0').run();assert.equal(h.api.enforceShopItemLimit('g'),20);
+ assert.equal(h.db.prepare("SELECT COUNT(*) n FROM economy_shop_items WHERE guild_id='g'").get().n,100);
+ assert.equal(h.db.prepare("SELECT COUNT(*) n FROM economy_shop_items WHERE guild_id='g' AND listed=1").get().n,20);
+ assert.equal(h.db.prepare('SELECT listed FROM economy_shop_items WHERE id=999').get().listed,1);
+ h.db.exec('UPDATE economy_shop_items SET listed=0 WHERE id=1; UPDATE economy_shop_items SET listed=1,deactivation_reason=NULL WHERE id=100');h.api.enforceShopItemLimit('g');assert.equal(h.db.prepare('SELECT listed FROM economy_shop_items WHERE id=100').get().listed,1);h.db.close();
+});

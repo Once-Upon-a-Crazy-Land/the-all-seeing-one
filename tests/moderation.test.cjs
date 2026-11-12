@@ -89,6 +89,7 @@ function setup() {
     };
   }
   context.exports.moderationSettings(guild.id);
+  db.prepare("UPDATE moderation_settings SET enabled = 1 WHERE guild_id = ?").run(guild.id);
   return { db, api: context.exports, events, responses, interaction, actor, user, guild, setActor: v => actorAllowed = v, setBot: v => botAllowed = v, failDM: () => dmFails = true, targetError: v => targetError = v, higherRole: () => higherRole = true };
 }
 const content = payload => payload.components ? payload.components.flatMap(c => c.toJSON().components.filter(v => v.type === 10).map(v => v.content)).join('\n') : payload.embeds.map(e => e.toJSON().description).join('\n');

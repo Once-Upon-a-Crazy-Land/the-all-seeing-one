@@ -1,3 +1,4 @@
+import { economyTransactionDefaults } from "./db.js";
 import { ensureLogWebhook } from "./log-webhooks.js";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -7,10 +8,10 @@ import helmet from "helmet";
 import { ChannelType, ContainerBuilder, MessageFlags, PermissionFlagsBits, SeparatorBuilder, TextDisplayBuilder } from "discord.js";
 import { bot } from "./bot.js";
 import { config } from "./config.js";
-import { db, ensureDefaultEconomySystem, ensureDefaultSystem, settingsFor, xpForLevel } from "./db.js";
+import { db, ensureDefaultEconomySystem, ensureDefaultSystem, setSystemModuleEnabled, settingsFor, xpForLevel } from "./db.js";
 import "./types.js";
 import { feedbackStore } from "./feedback.js";
-import { premiumStatus, createPremiumSubscription, activatePremiumSubscription, handlePayPalWebhook, startPremiumSync } from "./premium.js";
+import { enforceShopItemLimit, premiumStatus, createPremiumSubscription, activatePremiumSubscription, handlePayPalWebhook, startPremiumSync } from "./premium.js";
 
 import { moderationSettings, moderationCases, validateWarningRules } from "./moderation.js";
 
@@ -209,6 +210,16 @@ app.put("/api/guilds/:guildId/moderation", requireUser, canManage, async (req, r
   } catch (error) { next(error); }
 });
 
+app.patch("/api/guilds/:guildId/modules/:module", requireUser, canManage, (req, res) => {
+  const module = req.params.module;
+  const enabled = req.body?.enabled;
+  if ((module !== "levels" && module !== "economy") || typeof enabled !== "boolean") {
+    return res.status(400).json({ error: "Invalid module setting" });
+  }
+  setSystemModuleEnabled(String(req.params.guildId), module, enabled);
+  res.json({ enabled });
+});
+
 app.get("/api/guilds/:guildId/settings", requireUser, canManage, (req, res) => {
   const guild = bot.guilds.cache.get(String(req.params.guildId))!;
   ensureDefaultSystem(guild.id);
@@ -234,12 +245,13 @@ app.get("/api/guilds/:guildId/settings", requireUser, canManage, (req, res) => {
   const economySharedNames = Object.fromEntries(["shopName", "inventoryName", "leaderboardName"].filter(key => economyConfig[key] !== undefined).map(key => [key, economyConfig[key]]));
   const economySystems = db.prepare("SELECT * FROM economy_systems WHERE guild_id=? AND deleted=0 ORDER BY id").all(guild.id) as Array<any>;
   const economy = { systemId: economySystems[0]?.id, currencySymbol: guildSettings.currency_symbol, startingBalance: guildSettings.starting_balance, maxCashBalance: guildSettings.max_cash_balance, maxBankBalance: guildSettings.max_bank_balance, moneyAuditChannelId: guildSettings.money_audit_channel_id, config: economyConfig };
+  enforceShopItemLimit(guild.id);
   const shopItems = (db.prepare("SELECT * FROM economy_shop_items WHERE guild_id=? ORDER BY id DESC").all(guild.id) as Array<any>).map(item => ({
     ...item,
     prices: db.prepare(`SELECT p.id,p.system_id AS systemId,p.amount,p.join_operator AS operator,s.name,s.currency_symbol AS currencySymbol,s.enabled AS systemEnabled,s.deleted AS systemDeleted
       FROM economy_shop_prices p JOIN economy_systems s ON s.id=p.system_id WHERE p.item_id=? ORDER BY p.id`).all(item.id)
   }));
-  res.json({ moderationEnabled: !!moderationSettings(guild.id).enabled, premium: premiumStatus(guild.id), systems: detailedSystems, economySystems: economySystems.map(system => ({ ...system, config: JSON.parse(system.config_json || "{}") })), economySharedNames, channels, ruleChannels, roles, emojis, economy, shopItems, memberCount: guild.memberCount });
+  res.json({ modules: { levels: !!guildSettings.levels_module_enabled, economy: !!guildSettings.economy_module_enabled }, moderationEnabled: !!moderationSettings(guild.id).enabled, premium: premiumStatus(guild.id), systems: detailedSystems, economySystems: economySystems.map(system => ({ ...system, config: { ...economyTransactionDefaults, ...JSON.parse(system.config_json || "{}") } })), economySharedNames, channels, ruleChannels, roles, emojis, economy, shopItems, memberCount: guild.memberCount });
 });
 
 app.put("/api/guilds/:guildId/economy", requireUser, canManage, async (req, res) => {
@@ -263,6 +275,11 @@ app.put("/api/guilds/:guildId/economy", requireUser, canManage, async (req, res)
     catch { return res.status(400).json({ error: "Could not set up the economy webhook. The bot needs View Channel and Manage Webhooks in the log channel." }); }
   }
   const rawConfig = req.body?.config && typeof req.body.config === "object" && !Array.isArray(req.body.config) ? req.body.config : {};
+  for (const [key, value] of Object.entries(economyTransactionDefaults)) {
+    if (rawConfig[key] === undefined || rawConfig[key] === null || rawConfig[key] === "") rawConfig[key] = value;
+  }
+  const activitySystemId = Number(req.body?.systemId) || ensureDefaultEconomySystem(guildId);
+  rawConfig.activityCommandsEnabled = !!db.prepare("SELECT 1 FROM economy_systems WHERE id=? AND guild_id=? AND json_extract(config_json,'$.activityCommandsEnabled') IN (1,'true')").get(activitySystemId, guildId);
   const economyConfig = JSON.stringify(Object.fromEntries(Object.entries(rawConfig).slice(0, 100).map(([key, value]) => [key.slice(0, 64), Array.isArray(value) ? value.map(String).slice(0, 100) : typeof value === "boolean" ? value : String(value).slice(0, 500)])));
   settingsFor(guildId);
   db.prepare("UPDATE guild_settings SET currency_symbol=?, starting_balance=?, max_cash_balance=?, max_bank_balance=?, money_audit_channel_id=?, economy_config=?, updated_at=CURRENT_TIMESTAMP WHERE guild_id=?").run(currencySymbol, startingBalance, maxCashBalance, maxBankBalance, moneyAuditChannelId, economyConfig, guildId);
@@ -274,13 +291,25 @@ app.put("/api/guilds/:guildId/economy", requireUser, canManage, async (req, res)
 
 app.post("/api/guilds/:guildId/economy/shop-items", requireUser, canManage, (req, res) => {
   const guildId = String(req.params.guildId), guild = bot.guilds.cache.get(guildId)!, body = req.body || {};
+  const itemLimit = enforceShopItemLimit(guildId);
+  const itemCount = (db.prepare("SELECT COUNT(*) AS count FROM economy_shop_items WHERE guild_id=?").get(guildId) as { count: number }).count;
+  if (itemCount >= itemLimit) return res.status(403).json({ error: `This server can create up to ${itemLimit} shop items, including unlisted items.` });
+  const builderLimit = premiumStatus(guildId).active ? 4 : 2;
+  const requirements = Array.isArray(body.requirements) ? body.requirements : [];
+  const actions = Array.isArray(body.actions) ? body.actions : [];
+  if (requirements.length > builderLimit || actions.length > builderLimit) return res.status(403).json({ error: `This server can have up to ${builderLimit} requirements and ${builderLimit} actions per item.` });
+  for (const requirement of requirements) {
+    if (!requirement || !["role", "item"].includes(requirement.type) || ![undefined, "buy", "use", "both"].includes(requirement.event)) return res.status(400).json({ error: "Choose a valid requirement" });
+    if (requirement.type === "role" && !guild.roles.cache.has(String(requirement.roleId || requirement.value || ""))) return res.status(400).json({ error: "Choose a role for each role requirement" });
+    if (requirement.type === "item" && !db.prepare("SELECT id FROM economy_shop_items WHERE id=? AND guild_id=?").get(Number(requirement.itemId || requirement.value || 0), guildId)) return res.status(400).json({ error: "Choose a created item for each item requirement" });
+  }
   const name = String(body.name || "").trim().slice(0, 100);
   if (name.length < 3) return res.status(400).json({ error: "Item name must be at least 3 characters" });
   const price = Math.max(0, Math.min(9_000_000_000_000_000, Math.floor(Number(body.price) || 0)));
   const allowedApplicationEmojis = new Set(["1553368966850813963", "1553368950082113536"]);
   const submittedEmoji = String(body.emojiId || "");
   const emojiId = guild.emojis.cache.has(submittedEmoji) || allowedApplicationEmojis.has(submittedEmoji) || isSingleUnicodeEmoji(submittedEmoji) ? submittedEmoji : null;
-  const result = db.prepare(`INSERT INTO economy_shop_items (guild_id,name,price,category,description,emoji_id,unlimited_stock,stock,listed,inventory_item,usable,sellable,expires_at,requirements_json,actions_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(guildId, name, price, String(body.category || "").slice(0, 50), String(body.description || "").slice(0, 1000), emojiId, body.unlimitedStock ? 1 : 0, Math.max(0, Math.floor(Number(body.stock) || 0)), body.listed ? 1 : 0, body.inventoryItem ? 1 : 0, body.usable ? 1 : 0, body.sellable ? 1 : 0, body.expiresAt ? String(body.expiresAt) : null, JSON.stringify(Array.isArray(body.requirements) ? body.requirements.slice(0, 3) : []), JSON.stringify(Array.isArray(body.actions) ? body.actions.slice(0, 3) : []));
+  const result = db.prepare(`INSERT INTO economy_shop_items (guild_id,name,price,category,description,emoji_id,unlimited_stock,stock,listed,inventory_item,usable,sellable,expires_at,requirements_json,actions_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(guildId, name, price, String(body.category || "").slice(0, 50), String(body.description || "").slice(0, 1000), emojiId, body.unlimitedStock ? 1 : 0, Math.max(0, Math.floor(Number(body.stock) || 0)), body.listed ? 1 : 0, body.inventoryItem ? 1 : 0, body.usable ? 1 : 0, body.sellable ? 1 : 0, body.expiresAt ? String(body.expiresAt) : null, JSON.stringify(requirements), JSON.stringify(actions));
   const itemId = Number(result.lastInsertRowid);
   const validSystems = new Set((db.prepare("SELECT id FROM economy_systems WHERE guild_id=? AND deleted=0").all(guildId) as Array<{ id: number }>).map(system => system.id));
   const submittedPrices = Array.isArray(body.prices) ? body.prices : [];
@@ -300,7 +329,7 @@ app.post("/api/guilds/:guildId/economy/systems", requireUser, canManage, (req, r
   const limit = premiumStatus(guildId).systemLimit;
   if (count >= limit) return res.status(403).json({ error: `This server can have up to ${limit} economy systems. ${limit === 2 ? "Upgrade to premium for 10." : ""}` });
   const name = String(req.body?.name || `Currency ${count + 1}`).trim().slice(0, 50) || `Currency ${count + 1}`;
-  const result = db.prepare("INSERT INTO economy_systems (guild_id,name) VALUES (?,?)").run(guildId, name);
+  const result = db.prepare("INSERT INTO economy_systems (guild_id,name,config_json) VALUES (?,?,?)").run(guildId, name, JSON.stringify({ ...economyTransactionDefaults, activityCommandsEnabled: false }));
   const system = db.prepare("SELECT * FROM economy_systems WHERE id=?").get(Number(result.lastInsertRowid));
   res.status(201).json(system);
 });
@@ -323,9 +352,13 @@ app.patch("/api/guilds/:guildId/economy/systems/:systemId", requireUser, canMana
   const name = String(req.body?.name || "").trim().slice(0, 50);
   if (!name) return res.status(400).json({ error: "System name is required" });
   const enabled = req.body?.enabled === false ? 0 : 1;
+  const activityConfig = JSON.parse((existing as any).config_json || "{}");
+  if (typeof req.body?.activityCommandsEnabled === "boolean") activityConfig.activityCommandsEnabled = req.body.activityCommandsEnabled;
+  const owner = db.prepare("SELECT name FROM economy_systems WHERE guild_id=? AND deleted=0 AND id<>? AND json_extract(config_json,'$.activityCommandsEnabled') IN (1,'true')").get(guildId, systemId) as { name: string } | undefined;
+  if ((activityConfig.activityCommandsEnabled === true || activityConfig.activityCommandsEnabled === "true") && owner) return res.status(409).json({ error: `Disable activity commands in ${owner.name} before enabling them here.` });
   const affectedItems = enabled ? [] : (db.prepare("SELECT item_id FROM economy_shop_prices WHERE system_id=?").all(systemId) as Array<{ item_id: number }>).map(row => row.item_id);
   if (!enabled) db.prepare(`UPDATE economy_shop_items SET listed=0,deactivation_reason=? WHERE guild_id=? AND id IN (SELECT item_id FROM economy_shop_prices WHERE system_id=?)`).run(`The connected economy system “${(existing as any).name}” is disabled.`, guildId, systemId);
-  db.prepare("UPDATE economy_systems SET name=?,enabled=? WHERE id=? AND guild_id=?").run(name, enabled, systemId, guildId);
+  db.prepare("UPDATE economy_systems SET name=?,enabled=?,config_json=? WHERE id=? AND guild_id=?").run(name, enabled, JSON.stringify(activityConfig), systemId, guildId);
   res.json({ ...(db.prepare("SELECT * FROM economy_systems WHERE id=?").get(systemId) as object), deactivatedShopItemIds: affectedItems });
 });
 
@@ -337,7 +370,7 @@ app.post("/api/guilds/:guildId/economy/systems/:systemId/apply-template", requir
   if (!source || !target) return res.status(404).json({ error: "Economy system not found" });
   if (!source.enabled) db.prepare(`UPDATE economy_shop_items SET listed=0,deactivation_reason=? WHERE guild_id=? AND id IN (SELECT item_id FROM economy_shop_prices WHERE system_id=?)`).run(`The connected economy system is disabled.`, guildId, targetId);
   db.prepare(`UPDATE economy_systems SET currency_symbol=?,starting_balance=?,max_cash_balance=?,max_bank_balance=?,config_json=?,enabled=? WHERE id=? AND guild_id=?`)
-    .run(source.currency_symbol, source.starting_balance, source.max_cash_balance, source.max_bank_balance, source.config_json, source.enabled, targetId, guildId);
+    .run(source.currency_symbol, source.starting_balance, source.max_cash_balance, source.max_bank_balance, JSON.stringify({ ...JSON.parse(source.config_json || "{}"), activityCommandsEnabled: !!db.prepare("SELECT 1 FROM economy_systems WHERE id=? AND json_extract(config_json,'$.activityCommandsEnabled') IN (1,'true')").get(targetId) }), source.enabled, targetId, guildId);
   res.json(db.prepare("SELECT * FROM economy_systems WHERE id=?").get(targetId));
 });
 
@@ -345,6 +378,15 @@ app.put("/api/guilds/:guildId/economy/shop-items/:itemId", requireUser, canManag
   const guildId = String(req.params.guildId), itemId = Number(req.params.itemId), guild = bot.guilds.cache.get(guildId)!, body = req.body || {};
   const existing = db.prepare("SELECT id FROM economy_shop_items WHERE id=? AND guild_id=?").get(itemId, guildId);
   if (!existing) return res.status(404).json({ error: "Shop item not found" });
+  const builderLimit = premiumStatus(guildId).active ? 4 : 2;
+  const requirements = Array.isArray(body.requirements) ? body.requirements : [];
+  const actions = Array.isArray(body.actions) ? body.actions : [];
+  if (requirements.length > builderLimit || actions.length > builderLimit) return res.status(403).json({ error: `This server can have up to ${builderLimit} requirements and ${builderLimit} actions per item.` });
+  for (const requirement of requirements) {
+    if (!requirement || !["role", "item"].includes(requirement.type) || ![undefined, "buy", "use", "both"].includes(requirement.event)) return res.status(400).json({ error: "Choose a valid requirement" });
+    if (requirement.type === "role" && !guild.roles.cache.has(String(requirement.roleId || requirement.value || ""))) return res.status(400).json({ error: "Choose a role for each role requirement" });
+    if (requirement.type === "item" && !db.prepare("SELECT id FROM economy_shop_items WHERE id=? AND guild_id=?").get(Number(requirement.itemId || requirement.value || 0), guildId)) return res.status(400).json({ error: "Choose a created item for each item requirement" });
+  }
   const name = String(body.name || "").trim().slice(0, 100);
   if (name.length < 3) return res.status(400).json({ error: "Item name must be at least 3 characters" });
   const systems = db.prepare("SELECT id,enabled FROM economy_systems WHERE guild_id=?").all(guildId) as Array<{ id: number; enabled: number }>;
@@ -352,14 +394,17 @@ app.put("/api/guilds/:guildId/economy/shop-items/:itemId", requireUser, canManag
   const prices = (Array.isArray(body.prices) ? body.prices : []).map((entry: any, index: number) => ({ systemId: Number(entry.systemId), amount: Math.max(0, Math.min(9_000_000_000_000_000, Math.floor(Number(entry.amount) || 0))), operator: index > 0 && String(entry.operator).toLowerCase() === "and" ? "and" : "or" })).filter((entry: any) => validSystems.has(entry.systemId)).slice(0, 20) as Array<{ systemId: number; amount: number; operator: "and" | "or" }>;
   if (!prices.length) return res.status(400).json({ error: "Add at least one valid price" });
   if (new Set(prices.map(entry => entry.systemId)).size !== prices.length) return res.status(400).json({ error: "An economy system cannot be used more than once in the same price" });
+  const itemLimit = enforceShopItemLimit(guildId);
   const listed = !!body.listed;
+  const listedCount = (db.prepare("SELECT COUNT(*) AS count FROM economy_shop_items WHERE guild_id=? AND listed=1 AND id<>?").get(guildId, itemId) as { count: number }).count;
+  if (listed && listedCount >= itemLimit) return res.status(403).json({ error: `This server can list up to ${itemLimit} shop items. Unlist another item first.` });
   if (listed && prices.some(price => !systems.find(system => system.id === price.systemId)?.enabled)) return res.status(400).json({ error: "Enable every connected economy system before listing this item" });
   const allowedApplicationEmojis = new Set(["1553368966850813963", "1553368950082113536"]);
   const submittedEmoji = String(body.emojiId || "");
   const emojiId = guild.emojis.cache.has(submittedEmoji) || allowedApplicationEmojis.has(submittedEmoji) || isSingleUnicodeEmoji(submittedEmoji) ? submittedEmoji : null;
   db.exec("BEGIN");
   try {
-    db.prepare(`UPDATE economy_shop_items SET name=?,price=?,category=?,description=?,emoji_id=?,unlimited_stock=?,stock=?,listed=?,inventory_item=?,usable=?,sellable=?,expires_at=?,requirements_json=?,actions_json=?,deactivation_reason=NULL WHERE id=? AND guild_id=?`).run(name, prices[0].amount, String(body.category || "").slice(0, 50), String(body.description || "").slice(0, 1000), emojiId, body.unlimitedStock ? 1 : 0, Math.max(0, Math.floor(Number(body.stock) || 0)), listed ? 1 : 0, body.inventoryItem ? 1 : 0, body.usable ? 1 : 0, body.sellable ? 1 : 0, body.expiresAt ? String(body.expiresAt) : null, JSON.stringify(Array.isArray(body.requirements) ? body.requirements.slice(0, 3) : []), JSON.stringify(Array.isArray(body.actions) ? body.actions.slice(0, 3) : []), itemId, guildId);
+    db.prepare(`UPDATE economy_shop_items SET name=?,price=?,category=?,description=?,emoji_id=?,unlimited_stock=?,stock=?,listed=?,inventory_item=?,usable=?,sellable=?,expires_at=?,requirements_json=?,actions_json=?,deactivation_reason=NULL WHERE id=? AND guild_id=?`).run(name, prices[0].amount, String(body.category || "").slice(0, 50), String(body.description || "").slice(0, 1000), emojiId, body.unlimitedStock ? 1 : 0, Math.max(0, Math.floor(Number(body.stock) || 0)), listed ? 1 : 0, body.inventoryItem ? 1 : 0, body.usable ? 1 : 0, body.sellable ? 1 : 0, body.expiresAt ? String(body.expiresAt) : null, JSON.stringify(requirements), JSON.stringify(actions), itemId, guildId);
     db.prepare("DELETE FROM economy_shop_prices WHERE item_id=?").run(itemId);
     for (const price of prices) db.prepare("INSERT INTO economy_shop_prices (item_id,system_id,amount,join_operator) VALUES (?,?,?,?)").run(itemId, price.systemId, price.amount, price.operator);
     db.exec("COMMIT");

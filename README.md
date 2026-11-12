@@ -54,6 +54,8 @@ Attach a persistent volume at `/data` and set `DATABASE_PATH=/data/crazyland.db`
 
 The bot defaults to the Railway volume mount when `DATABASE_PATH` is unset and rejects paths outside that mount. A relative path such as `./data/crazyland.db` resolves under `/app`, outside the `/data` volume, and loses data when the container is replaced. Before correcting an existing deployment, back up its active SQLite database onto the volume using SQLite's backup API, then change the variable and redeploy.
 
+Railway startup requires a volume. The bot creates a verified SQLite snapshot at startup and hourly in `backups/` beside the database, retaining 48 snapshots. It keeps an initialization marker and refuses to silently create an empty replacement if that database disappears. To restore, stop the bot and use a verified snapshot as the database, removing stale WAL/SHM sidecars while stopped; preserve the initialization marker. Volume snapshots protect against database mistakes, but not deletion of the volume itself: keep independent Railway volume backups as well.
+
 Generate a public domain under service Settings > Networking. Set `DISCORD_REDIRECT_URI=https://YOUR-DOMAIN/auth/discord/callback` and add exactly the same URL to the Discord Developer Portal OAuth2 redirects. Deploy the variable changes, then sign in through the public domain.
 
 A new volume starts with an empty database. To retain local data, transfer the SQLite database to the volume while the bot is stopped; do not run local and hosted instances simultaneously.

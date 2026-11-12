@@ -1,9 +1,9 @@
 import { sendLog } from "./log-webhooks.js";
-import { systemAvailable } from "./premium.js";
+import { enforceShopItemLimit, systemAvailable } from "./premium.js";
 import { AttachmentBuilder } from "discord.js";
 import { renderLeaderboardCard } from "./level-card.js";
 import { ActionRowBuilder, ButtonBuilder, ButtonInteraction, ButtonStyle, ChatInputCommandInteraction, ContainerBuilder, GuildMember, LabelBuilder, Message, MessageFlags, ModalBuilder, ModalSubmitInteraction, RepliableInteraction, SeparatorBuilder, SlashCommandBuilder, StringSelectMenuBuilder, StringSelectMenuInteraction, TextDisplayBuilder, TextInputBuilder, TextInputStyle, UserSelectMenuBuilder } from "discord.js";
-import { db, ensureDefaultEconomySystem, settingsFor } from "./db.js";
+import { db, ensureDefaultEconomySystem, settingsFor, systemModuleEnabled } from "./db.js";
 
 type EconomyConfig = Record<string, string | string[] | boolean>;
 type Account = { cash: number; bank: number };
@@ -16,6 +16,15 @@ const addInventory = db.prepare(`INSERT INTO economy_inventory (guild_id,user_id
 const recordTransaction = db.prepare("INSERT INTO economy_transactions (guild_id,user_id,other_user_id,action,amount,details,created_at) VALUES (?,?,?,?,?,?,?)");
 const economyEmoji = "<:crazygears:1553368966850813963>";
 const cartEmoji = "<:cart:1554529987061616720>";
+
+function meetsShopRequirements(item: ShopItem, event: "buy" | "use", guildId: string, userId: string, member: GuildMember) {
+  const requirements = JSON.parse(item.requirements_json || "[]") as Array<{ type?: string; roleId?: string; itemId?: string | number; value?: string; event?: string }>;
+  return requirements.filter(r => !r.event || r.event === event || r.event === "both").every(r => {
+    if (r.type === "role") return member.roles.cache.has(String(r.roleId || r.value || ""));
+    if (r.type === "item") return Boolean(db.prepare("SELECT 1 FROM economy_inventory i JOIN economy_shop_items s ON s.id=i.item_id AND s.guild_id=i.guild_id WHERE i.guild_id=? AND i.user_id=? AND i.item_id=? AND i.quantity>0").get(guildId, userId, Number(r.itemId || r.value || 0)));
+    return false;
+  });
+}
 
 function configFor(guildId: string) {
   try { return JSON.parse(settingsFor(guildId).economy_config) as EconomyConfig; } catch { return {}; }
@@ -56,6 +65,7 @@ function money(guildId: string, amount: number) {
   return `${system?.currency_symbol || ""} ${Math.floor(amount).toLocaleString()}`.trim();
 }
 function systemsFor(guildId: string) {
+  if (!systemModuleEnabled(guildId, "economy")) return [];
   ensureDefaultEconomySystem(guildId);
   return (db.prepare("SELECT * FROM economy_systems WHERE guild_id=? AND enabled=1 AND deleted=0 ORDER BY id").all(guildId) as EconomySystem[]).filter(system=>systemAvailable(guildId,"economy",system.id));
 }
@@ -296,6 +306,7 @@ async function auditPurchase(interaction: EconomyInteraction, item: ShopItem, pa
 }
 
 async function purchaseItem(interaction: EconomyInteraction, itemId: number, groupIndex: number) {
+  if (interaction.guildId) enforceShopItemLimit(interaction.guildId);
   const guildId = interaction.guildId!;
   const config = activeConfig(guildId);
   const respond = async (title: string, body: string, ephemeral = false) => {
@@ -313,10 +324,8 @@ async function purchaseItem(interaction: EconomyInteraction, itemId: number, gro
   if (!enabled(config, "shopEnabled")) return respond("Shop unavailable", "The shop is disabled.", true);
   const item = db.prepare("SELECT * FROM economy_shop_items WHERE guild_id=? AND id=? AND listed=1 AND (expires_at IS NULL OR expires_at>?)").get(guildId, itemId, new Date().toISOString()) as ShopItem | undefined;
   if (!item || (!item.unlimited_stock && item.stock < 1)) return respond("Item unavailable", "That item is unavailable.", true);
-  const requirements = JSON.parse(item.requirements_json || "[]") as Array<{ type?: string; roleId?: string; value?: string; event?: string }>;
   const member = interaction.member as GuildMember;
-  const requiredRoles = requirements.filter(r => (!r.event || r.event === "buy" || r.event === "both") && r.type === "role").map(r => r.roleId || r.value).filter(Boolean) as string[];
-  if (requiredRoles.some(role => !member.roles.cache.has(role))) return respond("Requirements not met", "You do not meet this item's role requirements.", true);
+  if (!meetsShopRequirements(item, "buy", guildId, interaction.user.id, member)) return respond("Requirements not met", "You do not meet this item's role or item requirements.", true);
   const selectedGroup = priceGroups(pricesFor(item.id))[groupIndex];
   if (!selectedGroup) return respond("Price unavailable", "That price option is no longer available.", true);
   const systems = systemsFor(guildId);
@@ -342,7 +351,10 @@ async function purchaseItem(interaction: EconomyInteraction, itemId: number, gro
 }
 async function rewardCommand(interaction: ChatInputCommandInteraction | ModalSubmitInteraction, action: "daily" | "work") {
   const guildId = interaction.guildId!;
-  const config = activeConfig(guildId);
+  const system = systemsFor(guildId).find(system => enabled(systemConfig(system), "activityCommandsEnabled", false));
+  if (!system) return replyV2(interaction, "Activities unavailable", "Daily and work rewards are disabled.", true);
+  const config = { ...configFor(guildId), ...systemConfig(system) };
+  const rewardMoney = (amount: number) => `${system.currency_symbol} ${Math.floor(amount).toLocaleString()}`.trim();
   const previous = cooldown(guildId, interaction.user.id, action);
   const now = Date.now();
   if (previous && previous.available_at > now) return replyV2(interaction, "Reward on cooldown", `You can claim this reward again <t:${Math.ceil(previous.available_at / 1000)}:R>.`, true);
@@ -357,14 +369,14 @@ async function rewardCommand(interaction: ChatInputCommandInteraction | ModalSub
   const earned = Number((db.prepare("SELECT COALESCE(SUM(amount),0) AS total FROM economy_transactions WHERE guild_id=? AND user_id=? AND amount>0 AND created_at>=?").get(guildId, interaction.user.id, now - 86_400_000) as { total: number }).total);
   const amount = Math.min(Math.floor(baseAmount * (1 + bonus / 100)), dailyLimit ? Math.max(0, dailyLimit - earned) : Number.MAX_SAFE_INTEGER);
   if (!amount) return replyV2(interaction, "Daily limit reached", "You have reached the daily earning limit.", true);
-  const value = getAccount(guildId, interaction.user.id, interaction.user.username);
-  const credited = Math.min(amount, Math.max(0, settingsFor(guildId).max_cash_balance - value.cash));
+  const value = accountForSystem(system, interaction.user.id, interaction.user.username);
+  const credited = Math.min(amount, Math.max(0, system.max_cash_balance - value.cash));
   if (!credited) return replyV2(interaction, "Balance full", `Your ${label(config, "cashName", "Cash").toLowerCase()} balance is already at its maximum.`, true);
   value.cash += credited;
-  saveAccount(guildId, interaction.user.id, interaction.user.username, value);
+  db.prepare("UPDATE economy_balances SET username=?,cash=?,bank=? WHERE system_id=? AND user_id=?").run(interaction.user.username, value.cash, value.bank, system.id, interaction.user.id);
   setCooldown(guildId, interaction.user.id, action, now + (action === "daily" ? 86_400_000 : 3_600_000), streak);
   recordTransaction.run(guildId, interaction.user.id, null, action, credited, "", now);
-  await replyV2(interaction, action === "daily" ? "Daily reward" : "Work complete", `You earned **${money(guildId, credited)}**${action === "daily" ? `\nDaily streak: **${streak}**` : ""}.`);
+  await replyV2(interaction, action === "daily" ? "Daily reward" : "Work complete", `You earned **${rewardMoney(credited)}**${action === "daily" ? `\nDaily streak: **${streak}**` : ""}.`);
 }
 
 const shopPageSize = 7;
@@ -398,6 +410,7 @@ function shopPage(interaction: EconomyInteraction, requestedPage = 0, ownerId = 
 }
 
 export async function handleEconomyCommand(interaction: EconomyInteraction) {
+  if (interaction.guildId) enforceShopItemLimit(interaction.guildId);
   if (!interaction.guildId || !interaction.guild) return false;
   if (interaction.isButton()) {
     if (!interaction.customId.startsWith("economy:shop-page:")) return false;
@@ -533,10 +546,8 @@ export async function handleEconomyCommand(interaction: EconomyInteraction) {
     if (!id) return void await replyV2(interaction, "Item required", "Choose an item from the shop.", true);
     const item = db.prepare("SELECT * FROM economy_shop_items WHERE guild_id=? AND id=? AND listed=1 AND (expires_at IS NULL OR expires_at>?)").get(guildId, id, new Date().toISOString()) as ShopItem | undefined;
     if (!item || (!item.unlimited_stock && item.stock < 1)) return void await replyV2(interaction, "Item unavailable", "That item is unavailable.", true);
-    const requirements = JSON.parse(item.requirements_json || "[]") as Array<{ type?: string; roleId?: string; value?: string; event?: string }>;
     const member = interaction.member as GuildMember;
-    const requiredRoles = requirements.filter(r => (!r.event || r.event === "buy" || r.event === "both") && r.type === "role").map(r => r.roleId || r.value).filter(Boolean) as string[];
-    if (requiredRoles.some(role => !member.roles.cache.has(role))) return void await replyV2(interaction, "Requirements not met", "You do not meet this item's role requirements.", true);
+    if (!meetsShopRequirements(item, "buy", guildId, interaction.user.id, member)) return void await replyV2(interaction, "Requirements not met", "You do not meet this item's role or item requirements.", true);
     const groups = priceGroups(pricesFor(item.id));
     if (!groups.length) return void await replyV2(interaction, "Item unavailable", "That item has no available price.", true);
     if (groups.length === 1) {
@@ -573,10 +584,8 @@ export async function handleEconomyCommand(interaction: EconomyInteraction) {
     if (!id) return void await replyV2(interaction, "Item required", "Choose an item from your inventory.", true);
     const item = db.prepare(`SELECT s.* FROM economy_inventory i JOIN economy_shop_items s ON s.id=i.item_id WHERE i.guild_id=? AND i.user_id=? AND i.item_id=? AND i.quantity>0 AND s.usable=1`).get(guildId, interaction.user.id, id) as ShopItem | undefined;
     if (!item) return void await replyV2(interaction, "Item unavailable", "You do not have a usable copy of that item.", true);
-    const requirements = JSON.parse(item.requirements_json || "[]") as Array<{ type?: string; roleId?: string; value?: string; event?: string }>;
     const member = interaction.member as GuildMember;
-    const requiredRoles = requirements.filter(r => (!r.event || r.event === "use" || r.event === "both") && r.type === "role").map(r => r.roleId || r.value).filter(Boolean) as string[];
-    if (requiredRoles.some(role => !member.roles.cache.has(role))) return void await replyV2(interaction, "Requirements not met", "You do not meet this item's role requirements.", true);
+    if (!meetsShopRequirements(item, "use", guildId, interaction.user.id, member)) return void await replyV2(interaction, "Requirements not met", "You do not meet this item's role or item requirements.", true);
     const actions = JSON.parse(item.actions_json || "[]") as Array<{ type?: string; value?: string; event?: string }>;
     for (const action of actions.filter(a => !a.event || a.event === "use" || a.event === "both")) {
       if (action.type === "role" && action.value) await member.roles.add(action.value).catch(console.error);

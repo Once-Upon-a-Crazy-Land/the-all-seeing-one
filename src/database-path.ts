@@ -2,6 +2,9 @@ import path from "node:path";
 
 export function databasePathFor(env: NodeJS.ProcessEnv): string {
   const mount = env.RAILWAY_VOLUME_MOUNT_PATH;
+  if (env.RAILWAY_ENVIRONMENT_ID && !mount) {
+    throw new Error("A persistent Railway volume is required before starting the bot");
+  }
   const databasePath = env.DATABASE_PATH || (mount ? path.join(mount, "crazyland.db") : "./data/crazyland.db");
   if (mount) {
     const relative = path.relative(path.resolve(mount), path.resolve(databasePath));

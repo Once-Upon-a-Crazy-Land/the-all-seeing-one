@@ -30,3 +30,64 @@
 @media(max-width:650px){.landing-v2 .landing-nav{padding:0 18px}.landing-v2 .brand span{display:none}.landing-v2 .navlinks{gap:8px}.hero-v2{min-height:auto;padding:65px 18px 80px}.hero-v2 h1{font-size:55px}.hero-v2 .hero-actions{align-items:flex-start;flex-direction:column;gap:20px}.discord-card{transform:none}.discord-message{padding-inline:12px}.wallet-grid{grid-template-columns:1fr}.floating-tag{display:none}.landing-features{padding:80px 18px}.feature-card{padding:25px;min-height:330px}.feature-icon,.feature-mark{right:22px}.landing-footer{align-items:flex-start;flex-direction:column;padding:28px 18px}.landing-footer .brand{margin:0}}
 
 .landing-v2 .custom-emoji{display:inline-block;width:1.25em;height:1.25em;object-fit:contain;vertical-align:-.25em}
+/* Hide the viewport scrollbar while preserving native page scrolling. */
+html {
+  scrollbar-width: none;
+}
+
+html::-webkit-scrollbar {
+  display: none;
+}
+
+.landing-v2,
+.has-falling-gears {
+  isolation: isolate;
+}
+
+.falling-gears {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  mask-image: linear-gradient(to bottom, #000, transparent);
+}
+
+.falling-gear {
+  position: absolute;
+  top: -160px;
+  left: var(--gear-left);
+  width: clamp(68px, 9vw, 110px);
+  height: auto;
+  opacity: .22;
+  image-rendering: pixelated;
+  animation: gear-fall var(--gear-period) linear var(--gear-delay) infinite;
+  animation-timing-function: linear(0, 1 var(--gear-fall-end), 1);
+}
+
+.gear-small {
+  --gear-rotation: 540deg;
+  --gear-period: 10s;
+  --gear-fall-end: 95%;
+}
+
+.gear-medium {
+  --gear-rotation: 300deg;
+  --gear-period: 20s;
+  --gear-fall-end: 55%;
+}
+
+.gear-large {
+  --gear-rotation: 120deg;
+  --gear-period: 42s;
+  --gear-fall-end: 28%;
+}
+
+@keyframes gear-fall {
+  from { transform: translateX(-50%); }
+  to { transform: translate(-30%, calc(100vh + 320px)) rotate(var(--gear-rotation)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .falling-gears { display: none; }
+}

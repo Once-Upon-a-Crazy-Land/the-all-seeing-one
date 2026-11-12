@@ -1,7 +1,8 @@
 import { systemAvailable } from "./premium.js";
+import { xpRange } from "./xp-range.js";
 import { AttachmentBuilder, Client, Events, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
 import { config } from "./config.js";
-import { db, ensureDefaultSystem, levelFromXp, xpForLevel } from "./db.js";
+import { db, ensureDefaultSystem, levelFromXp, systemModuleEnabled, xpForLevel } from "./db.js";
 import { renderLevelCard } from "./level-card.js";
 import { economyCommands, handleEconomyCommand, rewardEconomyMessage } from "./economy.js";
 
@@ -27,6 +28,7 @@ bot.on(Events.MessageCreate, async message => {
   if (await handleHoneypotMessage(message)) return;
   if (!message.guild || message.author.bot || !message.member) return;
   await rewardEconomyMessage(message);
+  if (!systemModuleEnabled(message.guild.id, "levels")) return;
   ensureDefaultSystem(message.guild.id);
   const systems = db.prepare("SELECT * FROM leveling_systems WHERE guild_id = ? AND enabled = 1").all(message.guild.id) as LevelingSystem[];
   for (const settings of systems) if (systemAvailable(message.guild.id, "leveling", settings.id)) await processSystem(settings, message);
@@ -78,10 +80,7 @@ async function processSystem(settings: LevelingSystem, message: import("discord.
   const now = Date.now();
   const current = memberRow.get(settings.id, message.author.id) as { xp: number; level: number; last_xp_at: number } | undefined;
   if (current && now - current.last_xp_at < settings.cooldown_seconds * 1000) return;
-  const minimums = String(settings.min_xp_values || "").split(",").filter(Boolean).map(value => Math.max(0, Math.floor(Number(value)) || 0));
-  const maximums = String(settings.max_xp_values || "").split(",").filter(Boolean).map(value => Math.max(0, Math.floor(Number(value)) || 0));
-  const minimum = minimums[matchedIndex] ?? 0;
-  const maximum = Math.max(minimum, maximums[matchedIndex] ?? 0);
+  const { minimum, maximum } = xpRange(settings, matchedIndex);
   if (!maximum) return;
   const gained = Math.floor(Math.random() * (maximum - minimum + 1)) + minimum;
   const xp = (current?.xp ?? 0) + gained;
@@ -145,7 +144,7 @@ const levelCommand = new SlashCommandBuilder()
 bot.on(Events.InteractionCreate, async interaction => {
   try {
   if (interaction.isAutocomplete() && interaction.commandName === "level") {
-    if (!interaction.guildId) return interaction.respond([]);
+    if (!interaction.guildId || !systemModuleEnabled(interaction.guildId, "levels")) return interaction.respond([]);
     ensureDefaultSystem(interaction.guildId);
     const query = interaction.options.getFocused().toLowerCase();
     const systems = db.prepare("SELECT id, name FROM leveling_systems WHERE guild_id=? ORDER BY id").all(interaction.guildId) as Array<{ id: number; name: string }>;
@@ -165,6 +164,9 @@ bot.on(Events.InteractionCreate, async interaction => {
   if (await handleModerationCommand(interaction)) return;
   if (await handleEconomyCommand(interaction)) return;
   if (interaction.commandName !== "level") return;
+  if (!systemModuleEnabled(interaction.guild.id, "levels")) {
+    return interaction.reply({ content: "Levels is disabled on this server.", ephemeral: true });
+  }
   await interaction.deferReply();
   ensureDefaultSystem(interaction.guild.id);
   const requestedId = Number(interaction.options.getString("system"));

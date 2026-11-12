@@ -1,6 +1,8 @@
 :root { color-scheme: dark; font-family: 'DM Sans', system-ui, sans-serif; background: #232428; color: #f2f3f5; }
 * { box-sizing: border-box; }
 body { margin: 0; }
+html { scrollbar-width: none; }
+html::-webkit-scrollbar { display: none; }
 header { padding: 22px max(20px, calc((100% - 900px) / 2)); display: flex; justify-content: space-between; gap: 24px; background: #2b2d31; border-bottom: 1px solid #3f4147; }
 a { color: inherit; text-underline-offset: 4px; }
 header a:first-child { font-weight: 700; text-decoration: none; }

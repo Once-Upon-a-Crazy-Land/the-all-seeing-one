@@ -14,13 +14,18 @@ export function systemAvailable(guildId: string, kind: 'leveling' | 'economy', s
   const rows=db.prepare('SELECT id FROM '+table+' WHERE guild_id=?'+(kind==='economy'?' AND deleted=0':'')+' ORDER BY id LIMIT ?').all(guildId,premiumStatus(guildId).systemLimit) as Array<{id:number}>;
   return rows.some(row=>row.id===systemId);
 }
+export function enforceShopItemLimit(guildId: string) {
+  const limit = premiumStatus(guildId).shopItemLimit;
+  db.prepare("UPDATE economy_shop_items SET listed=0,deactivation_reason=? WHERE guild_id=? AND listed=1 AND id NOT IN (SELECT id FROM economy_shop_items WHERE guild_id=? AND listed=1 ORDER BY id LIMIT ?)").run(`This server can list up to ${limit} shop items. Unlist another item to list this one.`, guildId, guildId, limit);
+  return limit;
+}
 export function checkoutAvailable() {
   const p=config.paypal;
   return !!(p.clientId && p.clientSecret && p.webhookId && /^(sandbox|live)$/.test(p.environment) && /^P-[A-Z0-9]+$/.test(p.planId));
 }
 export function premiumStatus(guildId: string) {
   const active=!!db.prepare("SELECT 1 FROM premium_subscriptions WHERE guild_id=? AND status='ACTIVE' AND valid_until>? LIMIT 1").get(guildId,Date.now());
-  return { active, systemLimit: active ? 10 : 2, checkoutAvailable: checkoutAvailable() };
+  return { active, systemLimit: active ? 10 : 2, shopItemLimit: active ? 100 : 20, checkoutAvailable: checkoutAvailable() };
 }
 
 async function paypal(path: string, method = "GET", body?: unknown, requestId?: string): Promise<any> {
