@@ -22,7 +22,30 @@ let unicodeEmojiGroups={};
 const emojiCategoryIcons={people:'😀',nature:'🌿',foods:'🍕',activity:'⚽',places:'🚀',objects:'💎',symbols:'❤️',flags:'🏳️'};
 const excludedUnicodeEmojiIds=new Set(['rightwards_hand','leftwards_hand','palm_down_hand','palm_up_hand']);
 const availableCurrencyEmojis=()=>[...globalEmojis,...(state.data?.emojis||[])];
-async function request(url, options) {const economySave=options?.method==='PUT'&&/\/economy$/.test(url)&&options.body&&state.economySystemId;if(economySave){const body=JSON.parse(options.body);body.systemId=state.economySystemId;options={...options,body:JSON.stringify(body)}} const response = await fetch(url, options); if (response.status === 401) location.href = '/auth/discord'; if (response.status === 204) return null; const json = await response.json(); if (!response.ok) throw new Error(json.error);if(economySave){const system=state.data?.economySystems?.find(entry=>entry.id===state.economySystemId);if(system)Object.assign(system,{currency_symbol:json.currencySymbol,starting_balance:json.startingBalance,max_cash_balance:json.maxCashBalance,max_bank_balance:json.maxBankBalance,config:json.config})} return json; }
+async function request(url, options) {
+  const economySave=options?.method==='PUT'&&/\/economy$/.test(url)&&options.body&&state.economySystemId;
+  if(economySave){
+    const body=JSON.parse(options.body);
+    body.systemId=state.economySystemId;
+    options={...options,body:JSON.stringify(body)};
+  }
+  const response=await fetch(url,options);
+  if(response.status===401){
+    location.href='/auth/discord';
+    throw new Error('Sign in required.');
+  }
+  if(response.status===204)return null;
+  const json=await response.json().catch(()=>{
+    if(response.status===404)throw new Error('This dashboard feature is unavailable on the server. Refresh and try again.');
+    throw new Error('The dashboard server returned an unexpected response. Try again.');
+  });
+  if(!response.ok)throw new Error(json?.error||'The dashboard request failed. Try again.');
+  if(economySave){
+    const system=state.data?.economySystems?.find(entry=>entry.id===state.economySystemId);
+    if(system)Object.assign(system,{currency_symbol:json.currencySymbol,starting_balance:json.startingBalance,max_cash_balance:json.maxCashBalance,max_bank_balance:json.maxBankBalance,config:json.config});
+  }
+  return json;
+}
 async function boot() { try { const [me,guilds,emojiData]=await Promise.all([request('/api/me'),request('/api/guilds'),request('/assets/emoji-data.json')]); unicodeEmojiGroups=Object.fromEntries(emojiData.categories.map(category=>[category.id,category.emojis.filter(id=>!excludedUnicodeEmojiIds.has(id)).map(id=>emojiData.emojis[id]).filter(Boolean).map(item=>({emoji:item.skins[0].native,unified:item.skins[0].unified.toLowerCase(),name:item.name,keywords:item.keywords||[]}))]));renderEmojiCategoryNav(); renderRailProfile(me); restoreSettingsDisclosures(me.id); const installed=await installedDashboardGuilds(guilds); renderServerRail(installed); if(!installed.length){$('#loading').innerHTML=`No manageable server has this bot installed yet.<br><a class="button" href="/invite">Add it to a server</a>`;return} await restoreDashboardView(me.id, installed); } catch(error){$('#loading').textContent=error.message} }
 async function loadGuild(id,preferredId,preferredEconomyId){ document.querySelectorAll('[data-module-toggle]').forEach(toggle=>toggle.disabled=true); $('#loading').classList.remove('hidden'); document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden')); state.guildId=id; syncServerRail(); state.data=await request(`/api/guilds/${id}/settings`); if(preferredEconomyId && state.data.economySystems.some(system=>system.id===preferredEconomyId))state.economySystemId=preferredEconomyId; state.systemId=preferredId&&state.data.systems.some(s=>s.id===preferredId)?preferredId:state.data.systems[0].id; $('#member-count').textContent=state.data.memberCount.toLocaleString(); const options=state.data.channels.map(c=>`<option value="${c.id}"># ${escapeHtml(c.name)}</option>`).join(''); const roleOptions=state.data.roles.map(r=>`<option value="${r.id}">@ ${escapeHtml(r.name)}</option>`).join(''); $('#channel').innerHTML='<option value="">Select a channel</option>'+options; $('#allowed-channels').innerHTML=options; $('#denied-channels').innerHTML=options; $('#allowed-roles').innerHTML=roleOptions; $('#denied-roles').innerHTML=roleOptions; renderPremium(); renderSystemSelect(); await selectSystem(state.systemId); $('#loading').classList.add('hidden'); $('#level-tabs').classList.remove('hidden'); $('#system-toolbar').classList.remove('hidden'); await showSection(document.querySelector('.tab.active')?.dataset.section||'levels'); }
 function renderModuleStatuses(){
@@ -731,6 +754,8 @@ let autoModRules=[];
 const autoModForm=$('#automod-form');
 const autoModSelector=$('#automod-rule');
 const autoModStatus=$('#automod-status');
+const autoModRetry=$('#automod-retry');
+const newAutoModRule='new';
 const autoModFields=$('#automod-fields');
 const autoModUrl=guildId=>`/api/guilds/${guildId}/automod`;
 
@@ -744,11 +769,13 @@ function updateAutoModFields(){
 }
 
 function selectAutoModRule(){
+  const create=autoModSelector.value===newAutoModRule;
   const rule=autoModRules.find(entry=>entry.id===autoModSelector.value);
   const readOnly=rule&&!rule.managed;
-  autoModForm.classList.toggle('hidden',!!readOnly);
+  autoModForm.classList.toggle('hidden',!create&&!rule?.managed);
   autoModStatus.textContent=readOnly?'Manage this rule in Discord server settings.':'';
-  if(readOnly)return;
+  if(!create&&!rule?.managed)return;
+  $('#automod-save').textContent=rule?'Save changes':'Create rule';
   $('#automod-name').value=rule?.name||'';
   $('#automod-type').value=rule?.type||'1';
   $('#automod-type').disabled=!!rule;
@@ -770,6 +797,7 @@ function selectAutoModRule(){
   $('#automod-enabled').checked=!!rule?.enabled;
   $('#automod-delete').classList.toggle('hidden',!rule);
   updateAutoModFields();
+  if(create)$('#automod-name').focus();
 }
 
 async function loadAutoMod(selectedId=''){
@@ -777,30 +805,37 @@ async function loadAutoMod(selectedId=''){
   const current=()=>guildId===state.guildId&&requestId===autoModRequestId;
   autoModSelector.disabled=true;
   autoModForm.classList.add('hidden');
+  autoModRetry.classList.add('hidden');
   autoModStatus.textContent='Loading rules…';
   try{
     const rules=await request(autoModUrl(guildId));
     if(!current())return;
+    if(!Array.isArray(rules))throw new Error('The server returned an unexpected AutoMod response. Try again.');
     autoModRules=rules;
     const options=entries=>entries.map(entry=>new Option(entry.name,entry.id));
-    autoModSelector.replaceChildren(new Option('New rule',''),...options(rules.map(rule=>({
+    const placeholder=new Option('Select a rule','');
+    placeholder.disabled=true;
+    autoModSelector.replaceChildren(placeholder,new Option('New rule',newAutoModRule),...options(rules.map(rule=>({
       ...rule,name:`${rule.name} (${rule.enabled?'enabled':'disabled'}${rule.managed?'':', managed in Discord'})`
     }))));
     $('#automod-roles').replaceChildren(...options(state.data.roles));
-    $('#automod-channels').replaceChildren(...options(state.data.ruleChannels));
+    $('#automod-channels').replaceChildren(...options(state.data.ruleChannels||state.data.channels));
     $('#automod-alert').replaceChildren(new Option('No Discord alert',''),...options(state.data.channels));
     autoModSelector.value=rules.some(rule=>rule.id===selectedId)?selectedId:'';
     autoModSelector.disabled=false;
     autoModFields.disabled=false;
     selectAutoModRule();
   }catch(error){
-    if(current())autoModStatus.textContent=error.message;
+    if(current()){
+      autoModStatus.textContent=error.message;
+      autoModRetry.classList.remove('hidden');
+    }
   }
 }
 
 async function saveAutoMod(method,body){
   const guildId=state.guildId, requestId=autoModRequestId;
-  const id=autoModSelector.value;
+  const id=method==='POST'?'':autoModSelector.value;
   const path=autoModUrl(guildId)+(id?`/${id}`:'');
   const current=()=>guildId===state.guildId&&requestId===autoModRequestId;
   autoModFields.disabled=true;
@@ -822,13 +857,14 @@ async function saveAutoMod(method,body){
 }
 
 autoModSelector.onchange=selectAutoModRule;
+autoModRetry.onclick=()=>void loadAutoMod();
 $('#automod-type').onchange=updateAutoModFields;
 autoModForm.onsubmit=event=>{
   event.preventDefault();
   const type=Number($('#automod-type').value);
   const lines=selector=>$(selector).value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
   const selected=selector=>[...$(selector).selectedOptions].map(option=>option.value);
-  void saveAutoMod(autoModSelector.value?'PUT':'POST',{
+  void saveAutoMod(autoModSelector.value===newAutoModRule?'POST':'PUT',{
     type,name:$('#automod-name').value,enabled:$('#automod-enabled').checked,
     keywords:lines('#automod-keywords'),patterns:lines('#automod-patterns'),allowList:lines('#automod-allow'),
     presets:selected('#automod-presets').map(Number),mentionLimit:Number($('#automod-mention-limit').value),

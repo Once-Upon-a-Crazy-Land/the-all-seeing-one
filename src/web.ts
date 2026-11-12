@@ -672,5 +672,6 @@ app.get("/api/guilds/:guildId/economy/leaderboard", requireUser, canManage, asyn
   res.json({ items, page, totalPages, total });
 });
 
+app.use("/api", (_req, res) => res.status(404).json({ error: "This dashboard feature is unavailable on the server. Refresh and try again." }));
 app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => { console.error(error); res.status(500).json({ error: "Something went wrong" }); });
 export const startWeb = () => { startPremiumSync(); return app.listen(config.port, () => console.log(`Dashboard running at http://localhost:${config.port}`)); };
