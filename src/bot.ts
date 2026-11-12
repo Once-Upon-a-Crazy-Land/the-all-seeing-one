@@ -216,8 +216,10 @@ bot.on(Events.InteractionCreate, async interaction => {
 });
 
 bot.once(Events.ClientReady, async client => {
-  const serverCount = client.guilds.cache.size;
+  const serverNames = client.guilds.cache.map(guild => guild.name).sort((a, b) => a.localeCompare(b));
+  const serverCount = serverNames.length;
   console.log(`Discord bot ready as ${client.user.tag} in ${serverCount} ${serverCount === 1 ? "server" : "servers"}`);
+  console.log(`Discord server names: ${JSON.stringify(serverNames)}`);
   await client.application.commands.set([levelCommand.toJSON(), ...economyCommands.map(command => command.toJSON()), ...moderationCommands.map(command => command.toJSON())]);
 });
 export const startBot = () => bot.login(config.token);
