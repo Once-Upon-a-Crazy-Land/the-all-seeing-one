@@ -28,6 +28,23 @@ export function premiumStatus(guildId: string) {
   return { active, systemLimit: active ? 10 : 2, shopItemLimit: active ? 100 : 20, checkoutAvailable: checkoutAvailable() };
 }
 
+class PayPalHttpError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string, readonly debugId?: string) {
+    super(message);
+  }
+
+  static async fromResponse(message: string, response: Response) {
+    const body = await response.json().catch(() => null) as { name?: unknown; error?: unknown; debug_id?: unknown } | null;
+    const code = body?.name ?? body?.error;
+    const debugId = body?.debug_id ?? response.headers.get("PayPal-Debug-Id");
+    return new PayPalHttpError(message, response.status,
+      typeof code === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(code) ? code : undefined,
+      typeof debugId === "string" && /^[A-Za-z0-9_-]{1,80}$/.test(debugId) ? debugId : undefined);
+  }
+}
+
+class PayPalSubscriptionMismatch extends Error {}
+
 async function paypal(path: string, method = "GET", body?: unknown, requestId?: string): Promise<any> {
   const p = config.paypal;
   if (!checkoutAvailable()) throw new Error("PayPal checkout is not configured");
@@ -36,13 +53,13 @@ async function paypal(path: string, method = "GET", body?: unknown, requestId?: 
     method: "POST", headers: { Authorization: `Basic ${Buffer.from(`${p.clientId}:${p.clientSecret}`).toString("base64")}`, "Content-Type": "application/x-www-form-urlencoded" },
     body: "grant_type=client_credentials", signal: AbortSignal.timeout(15000)
   });
-  if (!tokenResponse.ok) throw new Error("PayPal authentication failed");
+  if (!tokenResponse.ok) throw await PayPalHttpError.fromResponse("PayPal authentication failed", tokenResponse);
   const token = await tokenResponse.json() as { access_token: string };
   const response = await fetch(`${base}${path}`, {
     method, headers: { Authorization: `Bearer ${token.access_token}`, "Content-Type": "application/json", ...(requestId ? { "PayPal-Request-Id": requestId } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(20000)
   });
-  if (!response.ok) throw new Error("PayPal request failed");
+  if (!response.ok) throw await PayPalHttpError.fromResponse("PayPal request failed", response);
   return response.json();
 }
 
@@ -79,7 +96,7 @@ export async function syncSubscription(subscriptionId: string) {
   const stored=db.prepare("SELECT * FROM premium_subscriptions WHERE subscription_id=?").get(subscriptionId) as any;
   if(!stored)return;
   const result=await paypal("/v1/billing/subscriptions/"+encodeURIComponent(subscriptionId));
-  if(result.id!==subscriptionId||result.plan_id!==stored.plan_id||result.custom_id!==stored.guild_id)throw new Error("Subscription mismatch");
+  if(result.id!==subscriptionId||result.plan_id!==stored.plan_id||result.custom_id!==stored.guild_id)throw new PayPalSubscriptionMismatch("Subscription mismatch");
   const nextBilling=Date.parse(result.billing_info?.next_billing_time || "");
   // Access expires at the verified billing boundary unless renewal is confirmed.
   const validUntil=result.status==='ACTIVE' && Number.isFinite(nextBilling)?nextBilling:0;
@@ -115,7 +132,19 @@ export function startPremiumSync() {
     running=true;
     try {
       const rows=db.prepare("SELECT subscription_id,guild_id FROM premium_subscriptions WHERE status IN ('ACTIVE','APPROVED','SUSPENDED','APPROVAL_PENDING')").all() as Array<{subscription_id:string;guild_id:string}>;
-      for(const row of rows)try{await serialized(row.guild_id,()=>syncSubscription(row.subscription_id));}catch{console.error("PayPal subscription reconciliation failed");}
+      for (const row of rows) {
+        try {
+          await serialized(row.guild_id, () => syncSubscription(row.subscription_id));
+        } catch (error) {
+          const reason = error instanceof PayPalHttpError
+            ? [error.message, `HTTP ${error.status}`, error.code, error.debugId && `debug ID ${error.debugId}`].filter(Boolean).join(", ")
+            : error instanceof PayPalSubscriptionMismatch ? error.message
+              : error instanceof Error && error.name === "TimeoutError" ? "PayPal request timed out"
+                : error instanceof TypeError ? "PayPal connection failed"
+                  : "Unexpected reconciliation error";
+          console.error(`PayPal subscription reconciliation failed for server ${JSON.stringify(row.guild_id)} (${config.paypal.environment}) - ${reason}`);
+        }
+      }
     } finally {running=false;}
   };
   void sync();setInterval(()=>void sync(),5*60*1000).unref();
