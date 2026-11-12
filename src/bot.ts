@@ -216,7 +216,8 @@ bot.on(Events.InteractionCreate, async interaction => {
 });
 
 bot.once(Events.ClientReady, async client => {
+  const serverCount = client.guilds.cache.size;
+  console.log(`Discord bot ready as ${client.user.tag} in ${serverCount} ${serverCount === 1 ? "server" : "servers"}`);
   await client.application.commands.set([levelCommand.toJSON(), ...economyCommands.map(command => command.toJSON()), ...moderationCommands.map(command => command.toJSON())]);
-  console.log(`Discord bot ready as ${client.user.tag}`);
 });
 export const startBot = () => bot.login(config.token);
