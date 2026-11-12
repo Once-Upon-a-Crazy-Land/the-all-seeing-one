@@ -36,6 +36,12 @@ Use the Moderation dashboard to enable or disable commands, choose an optional l
 
 Moderation settings and warning streak rules save automatically after changes. Invalid rules show a validation message and are not saved. Warning streak rules are configured in Moderation settings. Assign an exact active-warning count to a timeout (with duration), kick, or ban. For example, configure warning 2 to kick and warning 3 to ban. No rules are enabled by default. Counts survive leaving and rejoining; clearing warnings resets the active count. Automatic punishments use the bot?s permissions and still respect the issuing moderator?s role hierarchy. A failed punishment leaves the warning recorded and reports the failure only in the moderator response and log.
 
+Open **Moderation → AutoMod** to create Discord rules for keywords and link patterns, Discord word lists, spam, and excessive mentions. Crazyland needs **Manage Server**. Each rule can exempt roles and channels, send a Discord alert, and optionally issue a Crazyland warning. Keyword and mention rules can also apply a native timeout with **Moderate Members**.
+
+Discord enforces enabled rules while Crazyland is offline. Enable the Moderation module to record blocks and native timeouts from rules created in the dashboard while Crazyland is online. Warning streak punishments require the account that enabled warnings on the rule to retain the relevant permissions and role position. Rules created directly in Discord can be viewed from the dashboard and edited in Discord.
+
+With Moderation enabled and **View Audit Log** granted to Crazyland, Discord member-menu timeouts and manual removals create cases while the bot is online. They also appear in the configured moderation log channel. Automatic expiration does not create a removal case.
+
 ## Level curve
 
 Level `n` requires `n² × 100` total XP. By default, a qualifying message earns 15–25 XP, at most once every 60 seconds. Bot messages are ignored.

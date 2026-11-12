@@ -14,6 +14,7 @@ import { feedbackStore } from "./feedback.js";
 import { enforceShopItemLimit, premiumStatus, createPremiumSubscription, activatePremiumSubscription, handlePayPalWebhook, startPremiumSync } from "./premium.js";
 
 import { moderationSettings, moderationCases, validateWarningRules } from "./moderation.js";
+import { autoModError, deleteAutoModRule, listAutoModRules, writeAutoModRule } from "./automod.js";
 
 const app = express();
 if (config.redirectUri.startsWith("https://")) app.set("trust proxy", 1);
@@ -153,6 +154,46 @@ app.post("/api/paypal/webhook", async (req, res) => {
   try { await handlePayPalWebhook(req.headers, req.body); res.sendStatus(204); }
   catch { res.status(400).json({ error: "Webhook could not be verified" }); }
 });
+
+const autoModPath = "/api/guilds/:guildId/automod";
+app.get(autoModPath, requireUser, canManage, async (req, res) => {
+  try {
+    const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+    res.json(await listAutoModRules(guild));
+  } catch (error) {
+    const failure = autoModError(error);
+    res.status(failure.status).json({ error: failure.message });
+  }
+});
+
+const autoModWrites = new Set<string>();
+async function changeAutoMod(req: Request, res: Response) {
+  const guildId = String(req.params.guildId);
+  if (req.headers.origin !== new URL(config.redirectUri).origin ||
+    (req.method !== "DELETE" && !req.is("application/json"))) {
+    return res.status(403).json({ error: "Invalid request" });
+  }
+  if (autoModWrites.has(guildId)) return res.status(409).json({ error: "Another AutoMod change is in progress. Try again." });
+  autoModWrites.add(guildId);
+  try {
+    const guild = bot.guilds.cache.get(guildId)!;
+    const actorId = req.session!.user!.id;
+    const ruleId = req.params.ruleId ? String(req.params.ruleId) : undefined;
+    if (req.method === "DELETE") {
+      await deleteAutoModRule(guild, actorId, ruleId!);
+      return res.sendStatus(204);
+    }
+    res.status(ruleId ? 200 : 201).json(await writeAutoModRule(guild, actorId, req.body, ruleId));
+  } catch (error) {
+    const failure = autoModError(error);
+    res.status(failure.status).json({ error: failure.message });
+  } finally {
+    autoModWrites.delete(guildId);
+  }
+}
+app.post(autoModPath, requireUser, canManage, changeAutoMod);
+app.put(autoModPath + "/:ruleId", requireUser, canManage, changeAutoMod);
+app.delete(autoModPath + "/:ruleId", requireUser, canManage, changeAutoMod);
 
 app.get("/api/guilds/:guildId/moderation", requireUser, canManage, (req, res) => {
   const guildId = String(req.params.guildId);

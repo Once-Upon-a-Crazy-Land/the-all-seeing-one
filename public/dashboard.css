@@ -1067,6 +1067,25 @@ textarea:focus,
   outline: 1px solid var(--discord-accent);
 }
 
+#automod-fields {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+#automod-fields label:has(> input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#automod-fields input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--discord-accent);
+}
+
 select option {
   color: var(--discord-text) !important;
   background: var(--discord-surface-raised) !important;

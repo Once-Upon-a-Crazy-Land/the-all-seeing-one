@@ -122,8 +122,9 @@ document.querySelectorAll('#level-tabs .level-tab').forEach(b=>b.onclick=()=>sho
 function showModerationPage(page){
   document.querySelectorAll('.moderation-child').forEach(button=>button.classList.toggle('active',button.dataset.moderationPage===page));
   document.querySelectorAll('[data-moderation-content]').forEach(content=>content.classList.toggle('hidden',content.dataset.moderationContent!==page));
-  $('#title').textContent=page==='honeypot'?'Honeypot':'Moderation overview';
+  $('#title').textContent=({honeypot:'Honeypot',automod:'AutoMod'})[page]||'Moderation overview';
   $('#crumb').textContent='DASHBOARD / MODERATION / '+page.toUpperCase();
+  if(page==='automod')void loadAutoMod();
 }
 document.querySelectorAll('.moderation-child').forEach(button=>button.onclick=()=>showModerationPage(button.dataset.moderationPage));
 document.querySelectorAll('.economy-child').forEach(button=>button.onclick=()=>showEconomyPage(button.dataset.economyPage));
@@ -725,6 +726,123 @@ function closeEconomyIssues(){$('#economy-issues-modal').classList.add('hidden')
 $('#economy-issues').onclick=()=>{renderEconomyIssues();$('#economy-issues-modal').classList.remove('hidden')};$('#close-economy-issues').onclick=closeEconomyIssues;$('#economy-issues-modal .modal-backdrop').onclick=closeEconomyIssues;
 $('#view-affected-shop-items').onclick=()=>{closeEconomyIssues();showEconomyPage('shop')};
 
+let autoModRequestId=0;
+let autoModRules=[];
+const autoModForm=$('#automod-form');
+const autoModSelector=$('#automod-rule');
+const autoModStatus=$('#automod-status');
+const autoModFields=$('#automod-fields');
+const autoModUrl=guildId=>`/api/guilds/${guildId}/automod`;
+
+function updateAutoModFields(){
+  const type=$('#automod-type').value;
+  document.querySelectorAll('[data-automod-types]').forEach(field=>{
+    const visible=field.dataset.automodTypes.split(' ').includes(type);
+    field.classList.toggle('hidden',!visible);
+    field.querySelectorAll('input,select,textarea').forEach(control=>control.disabled=!visible);
+  });
+}
+
+function selectAutoModRule(){
+  const rule=autoModRules.find(entry=>entry.id===autoModSelector.value);
+  const readOnly=rule&&!rule.managed;
+  autoModForm.classList.toggle('hidden',!!readOnly);
+  autoModStatus.textContent=readOnly?'Manage this rule in Discord server settings.':'';
+  if(readOnly)return;
+  $('#automod-name').value=rule?.name||'';
+  $('#automod-type').value=rule?.type||'1';
+  $('#automod-type').disabled=!!rule;
+  for(const [selector,values] of [
+    ['#automod-keywords',rule?.keywords],['#automod-patterns',rule?.patterns],['#automod-allow',rule?.allowList]
+  ])$(selector).value=(values||[]).join('\n');
+  for(const [selector,values] of [
+    ['#automod-presets',rule?.presets],['#automod-roles',rule?.exemptRoles],['#automod-channels',rule?.exemptChannels]
+  ]){
+    const selected=new Set((values||[]).map(String));
+    for(const option of $(selector).options)option.selected=selected.has(option.value);
+  }
+  $('#automod-mention-limit').value=rule?.mentionLimit??5;
+  $('#automod-block-message').value=rule?.blockMessage||'';
+  $('#automod-alert').value=rule?.alertChannel||'';
+  $('#automod-timeout').value=rule?.timeoutMinutes||0;
+  $('#automod-raid').checked=!!rule?.raidProtection;
+  $('#automod-warn').checked=!!rule?.warn;
+  $('#automod-enabled').checked=!!rule?.enabled;
+  $('#automod-delete').classList.toggle('hidden',!rule);
+  updateAutoModFields();
+}
+
+async function loadAutoMod(selectedId=''){
+  const guildId=state.guildId, requestId=++autoModRequestId;
+  const current=()=>guildId===state.guildId&&requestId===autoModRequestId;
+  autoModSelector.disabled=true;
+  autoModForm.classList.add('hidden');
+  autoModStatus.textContent='Loading rules…';
+  try{
+    const rules=await request(autoModUrl(guildId));
+    if(!current())return;
+    autoModRules=rules;
+    const options=entries=>entries.map(entry=>new Option(entry.name,entry.id));
+    autoModSelector.replaceChildren(new Option('New rule',''),...options(rules.map(rule=>({
+      ...rule,name:`${rule.name} (${rule.enabled?'enabled':'disabled'}${rule.managed?'':', managed in Discord'})`
+    }))));
+    $('#automod-roles').replaceChildren(...options(state.data.roles));
+    $('#automod-channels').replaceChildren(...options(state.data.ruleChannels));
+    $('#automod-alert').replaceChildren(new Option('No Discord alert',''),...options(state.data.channels));
+    autoModSelector.value=rules.some(rule=>rule.id===selectedId)?selectedId:'';
+    autoModSelector.disabled=false;
+    autoModFields.disabled=false;
+    selectAutoModRule();
+  }catch(error){
+    if(current())autoModStatus.textContent=error.message;
+  }
+}
+
+async function saveAutoMod(method,body){
+  const guildId=state.guildId, requestId=autoModRequestId;
+  const id=autoModSelector.value;
+  const path=autoModUrl(guildId)+(id?`/${id}`:'');
+  const current=()=>guildId===state.guildId&&requestId===autoModRequestId;
+  autoModFields.disabled=true;
+  autoModSelector.disabled=true;
+  try{
+    const saved=await request(path,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(current()){
+      showSaveToast(method==='DELETE'?'AutoMod rule deleted':'AutoMod rule saved');
+      await loadAutoMod(saved?.id);
+    }
+  }catch(error){
+    if(current()){
+      autoModFields.disabled=false;
+      autoModSelector.disabled=false;
+      autoModStatus.textContent=error.message;
+      showSaveToast(error.message,true);
+    }
+  }
+}
+
+autoModSelector.onchange=selectAutoModRule;
+$('#automod-type').onchange=updateAutoModFields;
+autoModForm.onsubmit=event=>{
+  event.preventDefault();
+  const type=Number($('#automod-type').value);
+  const lines=selector=>$(selector).value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+  const selected=selector=>[...$(selector).selectedOptions].map(option=>option.value);
+  void saveAutoMod(autoModSelector.value?'PUT':'POST',{
+    type,name:$('#automod-name').value,enabled:$('#automod-enabled').checked,
+    keywords:lines('#automod-keywords'),patterns:lines('#automod-patterns'),allowList:lines('#automod-allow'),
+    presets:selected('#automod-presets').map(Number),mentionLimit:Number($('#automod-mention-limit').value),
+    raidProtection:$('#automod-raid').checked,exemptRoles:selected('#automod-roles'),
+    exemptChannels:selected('#automod-channels'),alertChannel:$('#automod-alert').value,
+    blockMessage:$('#automod-block-message').value,
+    timeoutMinutes:[1,5].includes(type)?Number($('#automod-timeout').value):0,
+    warn:$('#automod-warn').checked
+  });
+};
+$('#automod-delete').onclick=()=>{
+  if(window.confirm('Delete this AutoMod rule from Discord?'))void saveAutoMod('DELETE');
+};
+
 let moderationRequestId=0;
 let moderationLoadedGuild=null;
 let moderationSaveTimer;
@@ -820,7 +938,8 @@ async function loadModeration(){
   if(!state.guildId||!state.data)return;
   const guildId=state.guildId,requestId=++moderationRequestId;
   moderationLoadedGuild=null;
-  const controls=()=>document.querySelectorAll('#moderation-enabled,#moderation input,#moderation select,#moderation .warning-rule-remove,#add-warning-rule');
+  const controls=()=>[...document.querySelectorAll('#moderation-enabled,#moderation input,#moderation select,#moderation .warning-rule-remove,#add-warning-rule')]
+    .filter(control=>!control.closest('[data-moderation-content="automod"]'));
   controls().forEach(control=>control.disabled=true);
   await flushModerationSave();
   if(guildId!==state.guildId||requestId!==moderationRequestId)return;

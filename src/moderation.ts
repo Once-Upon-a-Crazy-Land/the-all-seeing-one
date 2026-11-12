@@ -1,12 +1,19 @@
 import { sendLog } from "./log-webhooks.js";
+import { AuditLogEvent, type GuildAuditLogsEntry } from "discord.js";
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ButtonInteraction, StringSelectMenuBuilder, StringSelectMenuInteraction, ChatInputCommandInteraction, ModalSubmitInteraction, ModalBuilder, LabelBuilder, UserSelectMenuBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder, ContainerBuilder, SeparatorBuilder, MessageFlags, PermissionFlagsBits as P, SlashCommandBuilder, TextDisplayBuilder } from "discord.js";
 import { db } from "./db.js";
+import type { Guild, GuildMember } from "discord.js";
 
 db.exec(`CREATE TABLE IF NOT EXISTS moderation_settings (guild_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0, log_channel_id TEXT);
 CREATE TABLE IF NOT EXISTS moderation_cases (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, user_id TEXT, moderator_id TEXT NOT NULL, action TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL, cleared INTEGER NOT NULL DEFAULT 0);`);
-if (!(db.prepare("PRAGMA table_info(moderation_cases)").all() as Array<{ name: string }>).some(column => column.name === "message_links")) {
+const caseColumns = db.prepare("PRAGMA table_info(moderation_cases)").all() as Array<{ name: string }>;
+if (!caseColumns.some(column => column.name === "message_links")) {
   db.exec("ALTER TABLE moderation_cases ADD COLUMN message_links TEXT NOT NULL DEFAULT '[]'");
 }
+if (!caseColumns.some(column => column.name === "discord_audit_entry_id")) {
+  db.exec("ALTER TABLE moderation_cases ADD COLUMN discord_audit_entry_id TEXT");
+}
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS moderation_cases_discord_audit_entry ON moderation_cases(discord_audit_entry_id) WHERE discord_audit_entry_id IS NOT NULL");
 export type WarningRule = { warnings: number; action: "timeout" | "kick" | "ban"; minutes?: number };
 if (!(db.prepare("PRAGMA table_info(moderation_settings)").all() as Array<{ name: string }>).some(column => column.name === "warning_rules")) {
   db.exec("ALTER TABLE moderation_settings ADD COLUMN warning_rules TEXT NOT NULL DEFAULT '[]'");
@@ -91,6 +98,111 @@ export function moderationCases(guildId: string) {
   return db.prepare("SELECT * FROM moderation_cases WHERE guild_id=? ORDER BY id DESC LIMIT 50").all(guildId);
 }
 const permissions: Record<string, bigint> = { warn: P.ModerateMembers, warnings: P.ModerateMembers, clearwarnings: P.ModerateMembers, timeout: P.ModerateMembers, untimeout: P.ModerateMembers, kick: P.KickMembers, ban: P.BanMembers, unban: P.BanMembers, purge: P.ManageMessages };
+async function escalateWarning(
+  guild: Guild, actor: GuildMember, userId: string, count: number, rule: WarningRule,
+  caseId: string, auditReason: string, recordedReason: string, messageLinks: string[], automatic = false
+) {
+  const target = await guild.members.fetch(userId).catch(() => null);
+  const currentActor = await guild.members.fetch(automatic ? { user: actor.id, force: true } : actor.id);
+  const currentBot = await guild.members.fetchMe();
+  if (userId === guild.ownerId || userId === currentActor.id || userId === currentBot.id) throw new Error("This member is protected");
+  if (automatic && !currentActor.permissions.has([P.ManageGuild, P.ModerateMembers, permissions[rule.action]])) {
+    throw new Error("Rule author lacks permission for this punishment");
+  }
+  if (target && currentActor.id !== guild.ownerId && currentActor.roles.highest.comparePositionTo(target.roles.highest) <= 0) throw new Error("Moderator role must be above the member");
+  if (!currentBot.permissions.has(permissions[rule.action])) throw new Error(`Bot lacks permission to ${rule.action}`);
+  if (target && currentBot.roles.highest.comparePositionTo(target.roles.highest) <= 0) throw new Error("Bot role must be above the member");
+  const escalationReason = `Automatic ${rule.action} at warning ${count}: ${auditReason}`.slice(0, 512);
+  if (rule.action === "ban") {
+    if (automatic && !target) throw new Error("Member is absent");
+    if (target && !target.bannable) throw new Error("Member cannot be banned");
+    await guild.members.ban(userId, { reason: escalationReason });
+  } else if (rule.action === "kick") {
+    if (!target?.kickable) throw new Error("Member is absent or cannot be kicked");
+    await target.kick(escalationReason);
+  } else {
+    if (!target?.moderatable) throw new Error("Member is absent or cannot be timed out");
+    await target.timeout(rule.minutes! * 60000, escalationReason);
+  }
+  return db.prepare("INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at,message_links) VALUES (?,?,?,?,?,?,?)")
+    .run(guild.id, userId, automatic ? guild.client.user.id : actor.id, rule.action, `Automatic at warning ${count} (warning case #${caseId}): ${recordedReason}${rule.action === "timeout" ? ` - ${rule.minutes} minutes` : ""}`, new Date().toISOString(), JSON.stringify(messageLinks));
+}
+
+export async function recordAutoModCase(
+  guild: Guild, userId: string, reason: string, settings: ReturnType<typeof moderationSettings>, actor: GuildMember | null
+) {
+  const record = db.prepare("INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at) VALUES (?,?,?,?,?,?)")
+    .run(guild.id, userId, guild.client.user.id, actor ? "warn" : "automod", reason, new Date().toISOString());
+  const caseId = String(record.lastInsertRowid);
+  if (!actor) return { caseId, detail: "" };
+  const count = activeWarningCount(guild.id, userId);
+  const rule = warningRules(settings).find(entry => entry.warnings === count);
+  const details: string[] = [];
+  if (rule) {
+    try {
+      const punishment = await escalateWarning(guild, actor, userId, count, rule, caseId, reason, reason, [], true);
+      const duration = rule.action === "timeout" ? ` for ${rule.minutes} minutes` : "";
+      details.push(`Automatic ${rule.action}${duration} (case #${punishment.lastInsertRowid})`);
+    } catch (error) {
+      console.error("AutoMod warning escalation failed", error);
+      details.push(`Automatic ${rule.action} failed. Check permissions and role order.`);
+    }
+  }
+  try {
+    const recipient = await guild.client.users.fetch(userId);
+    const embed = new EmbedBuilder().setColor(0xf45f77).setDescription(`You were warned in ${guild.name} for ${reason}`);
+    await recipient.send({ embeds: [embed], allowedMentions: { parse: [] } });
+  } catch (error) {
+    console.error("AutoMod warning DM failed", error);
+    details.push("Warning DM could not be delivered.");
+  }
+  return { caseId, detail: details.join("\n") };
+}
+
+export function recordAutoModTimeout(guild: Guild, userId: string, reason: string, minutes: number) {
+  const record = db.prepare("INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at) VALUES (?,?,?,?,?,?)")
+    .run(guild.id, userId, guild.client.user.id, "timeout", `${reason} - ${minutes} minutes`, new Date().toISOString());
+  return { caseId: String(record.lastInsertRowid), detail: `Length: ${minutes} minutes` };
+}
+
+export async function handleDiscordTimeout(entry: GuildAuditLogsEntry, guild: Guild) {
+  const { action, targetId, executorId, createdTimestamp } = entry;
+  if (action !== AuditLogEvent.MemberUpdate || !targetId || !executorId || executorId === guild.client.user.id) return;
+  const change = entry.changes.find(field => field.key === "communication_disabled_until");
+  if (!change || change.new === change.old) return;
+  const expiresAt = typeof change.new === "string" ? Date.parse(change.new) : NaN;
+  const previousExpiry = typeof change.old === "string" ? Date.parse(change.old) : NaN;
+  const applied = expiresAt > createdTimestamp;
+  const removed = change.new == null && previousExpiry > createdTimestamp;
+  if (!applied && !removed) return;
+  const settings = moderationSettings(guild.id);
+  if (!settings.enabled) return;
+  const minutes = applied ? Math.max(1, Math.round((expiresAt - createdTimestamp) / 60000)) : null;
+  const reason = entry.reason?.trim() || "No reason provided";
+  const recordedReason = minutes === null ? reason : `${reason} - ${minutes} minutes`;
+  const record = db.prepare(`
+    INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at,discord_audit_entry_id)
+    VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING
+  `).run(guild.id, targetId, executorId, applied ? "timeout" : "untimeout", recordedReason, entry.createdAt.toISOString(), entry.id);
+  if (!record.changes || !settings.log_channel_id) return;
+
+  const [channel, member, moderator] = await Promise.all([
+    guild.channels.fetch(settings.log_channel_id),
+    guild.client.users.fetch(targetId).catch(() => null),
+    entry.executor ?? guild.client.users.fetch(executorId).catch(() => null)
+  ]);
+  if (!channel?.isSendable()) throw new Error("Moderation log channel unavailable");
+  const details = [
+    `Case #${record.lastInsertRowid} - ${applied ? "Timeout" : "Timeout removed"}: ${member?.username ?? targetId}`,
+    `Mod: ${moderator?.username ?? executorId}`,
+    minutes === null ? "" : `Length: ${minutes} minutes`,
+    entry.reason?.trim() ? `Reason: ${reason}` : ""
+  ].filter(Boolean).join("\n");
+  await sendLog(guild, channel, "moderation", {
+    embeds: [new EmbedBuilder().setColor(0xf45f77).setDescription(details)],
+    allowedMentions: { parse: [] }
+  });
+}
 const actionNames: Record<string, string> = { warn: "Warn member", warnings: "Modlogs", clearwarnings: "Clear case", timeout: "Timeout member", untimeout: "Remove timeout", kick: "Kick member", ban: "Ban member", unban: "Unban user", purge: "Purge messages" };
 export const moderationCommands = [new SlashCommandBuilder()
   .setName("mod").setDescription("Use server moderation tools").setDMPermission(false)
@@ -320,26 +432,7 @@ export async function handleModerationCommand(interaction: ChatInputCommandInter
       memberEscalationStatus = `Active warnings: ${count}.`;
       if (rule) {
         try {
-          const target = await guild.members.fetch(userId).catch(() => null);
-          const currentActor = await guild.members.fetch(actor.id);
-          const currentBot = await guild.members.fetchMe();
-          if (userId === guild.ownerId || userId === currentActor.id || userId === currentBot.id) throw new Error("This member is protected");
-          if (target && currentActor.id !== guild.ownerId && currentActor.roles.highest.comparePositionTo(target.roles.highest) <= 0) throw new Error("Moderator role must be above the member");
-          if (!currentBot.permissions.has(permissions[rule.action])) throw new Error(`Bot lacks permission to ${rule.action}`);
-          if (target && currentBot.roles.highest.comparePositionTo(target.roles.highest) <= 0) throw new Error("Bot role must be above the member");
-          const escalationReason = `Automatic ${rule.action} at warning ${count}: ${auditReason}`.slice(0, 512);
-          if (rule.action === "ban") {
-            if (target && !target.bannable) throw new Error("Member cannot be banned");
-            await guild.members.ban(userId, { reason: escalationReason });
-          } else if (rule.action === "kick") {
-            if (!target?.kickable) throw new Error("Member is absent or cannot be kicked");
-            await target.kick(escalationReason);
-          } else {
-            if (!target?.moderatable) throw new Error("Member is absent or cannot be timed out");
-            await target.timeout(rule.minutes! * 60000, escalationReason);
-          }
-          const punishment = db.prepare("INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at,message_links) VALUES (?,?,?,?,?,?,?)")
-            .run(guild.id, userId, actor.id, rule.action, `Automatic at warning ${count} (warning case #${caseId}): ${recordedReason}${rule.action === "timeout" ? ` - ${rule.minutes} minutes` : ""}`, new Date().toISOString(), JSON.stringify(messageLinks));
+          const punishment = await escalateWarning(guild, actor, userId, count, rule, caseId, auditReason, recordedReason, messageLinks);
           memberEscalationStatus += ` Punishment: ${rule.action}${rule.action === "timeout" ? ` for ${rule.minutes} minutes` : ""}.`;
           escalationStatus += ` Automatic punishment: ${rule.action}${rule.action === "timeout" ? ` for ${rule.minutes} minutes` : ""} completed (case #${punishment.lastInsertRowid}).`;
         } catch (error) {

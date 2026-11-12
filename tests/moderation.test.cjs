@@ -232,3 +232,77 @@ test('honeypot softbans once, skips exempt accounts, and records failed unban as
   assert(content(h.events.filter(e => e[0] === 'log').at(-1)[1]).includes('Manage Messages'));
   h.db.close();
 });
+
+test('AutoMod records blocks and native timeouts and issues warnings only for opted-in blocks', async () => {
+  const h = setup();
+  const source = ts.transpileModule(fs.readFileSync('src/automod.ts', 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
+  }).outputText;
+  const context = {
+    exports: {},
+    require: name => {
+      if (name === 'discord.js') return discord;
+      if (name === './moderation.js') return h.api;
+      if (name === './log-webhooks.js') return { sendLog: (_guild, channel, _kind, payload) => channel.send(payload) };
+      return { db: h.db };
+    },
+    console: { error() {} }
+  };
+  vm.runInNewContext(source, context);
+  h.guild.client = { user: await h.guild.members.fetchMe(), users: { fetch: async () => h.user } };
+  h.guild.members.fetch = async () => h.actor;
+  h.db.prepare('UPDATE moderation_settings SET log_channel_id=? WHERE guild_id=?').run('logs', h.guild.id);
+  const ruleId = '666666666666666666';
+  const { BlockMessage, Timeout, SendAlertMessage } = discord.AutoModerationActionType;
+  const fire = (type, metadata = {}) => context.exports.handleAutoModAction({
+    guild: h.guild, user: h.user, userId: h.user.id, ruleId, channelId: '777777777777777777',
+    action: { type, metadata }, autoModerationRule: { name: 'Invite links' }
+  });
+
+  await fire(BlockMessage);
+  assert.equal(h.api.moderationCases(h.guild.id).length, 0);
+  h.db.prepare('INSERT INTO automod_rules VALUES (?,?,NULL)').run(h.guild.id, ruleId);
+  await fire(BlockMessage);
+  h.db.prepare('UPDATE automod_rules SET warning_actor_id=?').run(h.actor.id);
+  await fire(SendAlertMessage);
+  await fire(Timeout, { durationSeconds: 300 });
+  await fire(BlockMessage);
+
+  assert.deepEqual(Array.from(h.api.moderationCases(h.guild.id), row => row.action), ['warn', 'timeout', 'automod']);
+  assert.equal(h.events.filter(([type]) => type === 'dm').length, 1);
+  assert.equal(h.events.filter(([type]) => type === 'log').length, 3);
+  assert.match(content(h.events.find(([type]) => type === 'dm')[1]), /^You were warned in Server for triggering AutoMod rule/);
+  for (const [, payload] of h.events.filter(([type]) => type === 'log')) {
+    assert.equal(payload.embeds[0].toJSON().color, 0xf45f77);
+  }
+});
+
+test('Discord audit timeouts and removals create one case each without duplicating Crazyland actions', async () => {
+  const h = setup();
+  const botUser = await h.guild.members.fetchMe();
+  h.guild.client = { user: botUser, users: { fetch: async () => h.user } };
+  h.db.prepare('UPDATE moderation_settings SET log_channel_id=? WHERE guild_id=?').run('logs', h.guild.id);
+  const createdAt = new Date('2026-11-13T12:00:00Z');
+  const expiry = '2026-11-13T12:05:00Z';
+  const key = 'communication_disabled_until';
+  const entry = {
+    id: '1', action: discord.AuditLogEvent.MemberUpdate, targetId: h.user.id,
+    executorId: h.actor.id, executor: h.actor.user, createdAt, createdTimestamp: +createdAt,
+    reason: 'Flooding chat', changes: [{ key, new: expiry }]
+  };
+  await Promise.all([h.api.handleDiscordTimeout(entry, h.guild), h.api.handleDiscordTimeout(entry, h.guild)]);
+  await h.api.handleDiscordTimeout({ ...entry, id: '2', reason: null, changes: [{ key, old: expiry }] }, h.guild);
+  await h.api.handleDiscordTimeout({ ...entry, id: '3', executorId: botUser.id }, h.guild);
+  await h.api.handleDiscordTimeout({ ...entry, id: '4', changes: [{ key: 'nick', new: 'Nickname' }] }, h.guild);
+  await h.api.handleDiscordTimeout({ ...entry, id: '5', changes: [{ key, old: '2026-11-13T11:55:00Z' }] }, h.guild);
+  await h.api.handleDiscordTimeout({ ...entry, id: '6', action: discord.AuditLogEvent.AutoModerationUserCommunicationDisabled }, h.guild);
+
+  const cases = h.api.moderationCases(h.guild.id);
+  assert.deepEqual(Array.from(cases, row => row.action), ['untimeout', 'timeout']);
+  assert.equal(cases[1].reason, 'Flooding chat - 5 minutes');
+  assert.equal(cases[1].moderator_id, h.actor.id);
+  assert.equal(cases[1].user_id, h.user.id);
+  assert.deepEqual(h.events.map(([type]) => type), ['log', 'log']);
+  assert.match(content(h.events[0][1]), /Timeout: Member\nMod: Moderator\nLength: 5 minutes\nReason: Flooding chat/);
+  assert.equal(h.events[0][1].embeds[0].toJSON().color, 0xf45f77);
+});

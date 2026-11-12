@@ -6,10 +6,17 @@ import { db, ensureDefaultSystem, levelFromXp, systemModuleEnabled, xpForLevel }
 import { renderLevelCard } from "./level-card.js";
 import { economyCommands, handleEconomyCommand, rewardEconomyMessage } from "./economy.js";
 
-import { moderationCommands, handleModerationCommand, handleHoneypotMessage } from "./moderation.js";
+import { moderationCommands, handleModerationCommand, handleHoneypotMessage, handleDiscordTimeout } from "./moderation.js";
+import { handleAutoModAction } from "./automod.js";
 
 export const bot = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers, GatewayIntentBits.AutoModerationExecution, GatewayIntentBits.GuildModeration]
+});
+bot.on(Events.GuildAuditLogEntryCreate, (entry, guild) => {
+  void handleDiscordTimeout(entry, guild).catch(error => console.error("Discord timeout case or log failed", error));
+});
+bot.on(Events.AutoModerationActionExecution, execution => {
+  void handleAutoModAction(execution).catch(error => console.error("AutoMod case or log failed", error));
 });
 
 const memberRow = db.prepare("SELECT xp, level, last_xp_at FROM system_progress WHERE system_id = ? AND user_id = ?");
