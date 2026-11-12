@@ -327,14 +327,14 @@ function openSelectPopup(select){
   const isEconomyContentType=select.id==='economy-content-type';
   const isBonusRole=select.dataset.economyKey==='bonusRole';
   const isModerationRole=['moderation-admin-role','moderation-moderator-role','honeypot-exempt-roles'].includes(select.id);
-  const isRoleMulti=isBonusRole||isModerationRole;
-  const isSearchable=select.id==='money-audit-channel'||isRoleMulti;
+  const isMultiPicker=isBonusRole||isModerationRole||select.hasAttribute('data-multi-picker');
+  const isSearchable=select.id==='money-audit-channel'||isMultiPicker;
   const system=isContentType&&!isEconomyContentType&&state.data?.systems.find(item=>item.id===state.systemId);
   const storedValue=isEconomyContentType?state.data?.economy?.config?.messageContentFilter||'any':isContentType?system?.content_filter||system?.content_type||'any':isBonusRole?state.data?.economy?.config?.bonusRole||select.value:select.value;
   const selectedValues=new Set(String(storedValue||'').split(',').filter(Boolean));
-  if(isContentType||isRoleMulti)menu.setAttribute('aria-multiselectable','true');
-  if(isSearchable)addSelectPopupTools(menu,isRoleMulti?()=>{selectedValues.clear();if(isBonusRole)state.data.economy.config.bonusRole='';syncBonusRoleSelect(select,'');select.dispatchEvent(new Event('change',{bubbles:true}));menu.querySelectorAll('.select-popup-option').forEach(item=>{item.classList.remove('selected');item.setAttribute('aria-selected','false')})}:null);
-  const popupOptions=[...select.options].filter(option=>!option.dataset.summary&&!(isRoleMulti&&option.value===''));
+  if(isContentType||isMultiPicker)menu.setAttribute('aria-multiselectable','true');
+  if(isSearchable)addSelectPopupTools(menu,isMultiPicker?()=>{selectedValues.clear();if(isBonusRole)state.data.economy.config.bonusRole='';syncMultiPickerSelect(select,'');select.dispatchEvent(new Event('change',{bubbles:true}));menu.querySelectorAll('.select-popup-option').forEach(item=>{item.classList.remove('selected');item.setAttribute('aria-selected','false')})}:null);
+  const popupOptions=[...select.options].filter(option=>!option.dataset.summary&&!(isMultiPicker&&option.value===''));
   let lastSelectedIndex=null;
   popupOptions.forEach((option,optionIndex)=>{
     const item=document.createElement('button');
@@ -371,13 +371,13 @@ function openSelectPopup(select){
         else refreshLevelContentPopupRewards();
         return;
       }
-      if(isRoleMulti){
+      if(isMultiPicker){
         const shouldSelect=!selectedValues.has(option.value);
         selectionRange(popupOptions.length,optionIndex,lastSelectedIndex,event.shiftKey).forEach(index=>selectedValues[shouldSelect?'add':'delete'](popupOptions[index].value));
         lastSelectedIndex=optionIndex;
         const value=[...selectedValues].join(',');
         if(isBonusRole)state.data.economy.config.bonusRole=value;
-        syncBonusRoleSelect(select,value);
+        syncMultiPickerSelect(select,value);
         select.dispatchEvent(new Event('change',{bubbles:true}));
         menu.querySelectorAll('.select-popup-option').forEach(button=>{const selected=selectedValues.has(button.dataset.value);button.classList.toggle('selected',selected);button.setAttribute('aria-selected',String(selected))});
         return;
@@ -440,8 +440,8 @@ const levelMessageDivider=document.createElement('div');levelMessageDivider.clas
 $('#money-audit-channel').options[0].textContent='None';
 document.querySelector('[data-economy-key="bonusRole"]').parentElement.firstChild.textContent='Bonus roles';
 const renderEconomyWithNone=renderEconomy;
-renderEconomy=()=>{renderEconomyWithNone();const option=$('#money-audit-channel').options[0];if(option)option.textContent='None';syncBonusRoleSelect();syncEconomyContentTypeSelect()};
-function syncBonusRoleSelect(select=document.querySelector('[data-economy-key="bonusRole"]'),raw=state.data?.economy?.config?.bonusRole||''){
+renderEconomy=()=>{renderEconomyWithNone();const option=$('#money-audit-channel').options[0];if(option)option.textContent='None';syncMultiPickerSelect();syncEconomyContentTypeSelect()};
+function syncMultiPickerSelect(select=document.querySelector('[data-economy-key="bonusRole"]'),raw=state.data?.economy?.config?.bonusRole||''){
   if(!select)return;
   select.querySelector('[data-summary]')?.remove();
   const values=String(raw).split(',').filter(Boolean),labels=values.map(value=>[...select.options].find(option=>option.value===value)?.textContent).filter(Boolean);
@@ -754,7 +754,6 @@ let autoModRules=[];
 const autoModForm=$('#automod-form');
 const autoModSelector=$('#automod-rule');
 const autoModStatus=$('#automod-status');
-const autoModRetry=$('#automod-retry');
 const newAutoModRule='new';
 const autoModFields=$('#automod-fields');
 const autoModUrl=guildId=>`/api/guilds/${guildId}/automod`;
@@ -784,10 +783,7 @@ function selectAutoModRule(){
   ])$(selector).value=(values||[]).join('\n');
   for(const [selector,values] of [
     ['#automod-presets',rule?.presets],['#automod-roles',rule?.exemptRoles],['#automod-channels',rule?.exemptChannels]
-  ]){
-    const selected=new Set((values||[]).map(String));
-    for(const option of $(selector).options)option.selected=selected.has(option.value);
-  }
+  ])syncMultiPickerSelect($(selector),(values||[]).join(','));
   $('#automod-mention-limit').value=rule?.mentionLimit??5;
   $('#automod-block-message').value=rule?.blockMessage||'';
   $('#automod-alert').value=rule?.alertChannel||'';
@@ -803,32 +799,34 @@ function selectAutoModRule(){
 async function loadAutoMod(selectedId=''){
   const guildId=state.guildId, requestId=++autoModRequestId;
   const current=()=>guildId===state.guildId&&requestId===autoModRequestId;
-  autoModSelector.disabled=true;
+  autoModRules=[];
+  autoModSelector.options.length=2;
+  autoModSelector.value='';
+  autoModSelector.disabled=false;
+  autoModFields.disabled=false;
   autoModForm.classList.add('hidden');
-  autoModRetry.classList.add('hidden');
   autoModStatus.textContent='Loading rules…';
+  const options=entries=>entries.map(entry=>new Option(entry.name,entry.id));
+  $('#automod-roles').replaceChildren(new Option('Select roles',''),...options(state.data.roles));
+  $('#automod-channels').replaceChildren(new Option('Select channels',''),...options(state.data.ruleChannels||state.data.channels));
+  $('#automod-alert').replaceChildren(new Option('No Discord alert',''),...options(state.data.channels));
   try{
     const rules=await request(autoModUrl(guildId));
     if(!current())return;
     if(!Array.isArray(rules))throw new Error('The server returned an unexpected AutoMod response. Try again.');
     autoModRules=rules;
-    const options=entries=>entries.map(entry=>new Option(entry.name,entry.id));
-    const placeholder=new Option('Select a rule','');
-    placeholder.disabled=true;
-    autoModSelector.replaceChildren(placeholder,new Option('New rule',newAutoModRule),...options(rules.map(rule=>({
+    autoModSelector.append(...options(rules.map(rule=>({
       ...rule,name:`${rule.name} (${rule.enabled?'enabled':'disabled'}${rule.managed?'':', managed in Discord'})`
     }))));
-    $('#automod-roles').replaceChildren(...options(state.data.roles));
-    $('#automod-channels').replaceChildren(...options(state.data.ruleChannels||state.data.channels));
-    $('#automod-alert').replaceChildren(new Option('No Discord alert',''),...options(state.data.channels));
-    autoModSelector.value=rules.some(rule=>rule.id===selectedId)?selectedId:'';
-    autoModSelector.disabled=false;
-    autoModFields.disabled=false;
-    selectAutoModRule();
+    if(autoModSelector.value===''&&rules.some(rule=>rule.id===selectedId)){
+      autoModSelector.value=selectedId;
+      selectAutoModRule();
+    }else if(autoModStatus.textContent==='Loading rules…'){
+      autoModStatus.textContent='';
+    }
   }catch(error){
     if(current()){
       autoModStatus.textContent=error.message;
-      autoModRetry.classList.remove('hidden');
     }
   }
 }
@@ -838,6 +836,7 @@ async function saveAutoMod(method,body){
   const id=method==='POST'?'':autoModSelector.value;
   const path=autoModUrl(guildId)+(id?`/${id}`:'');
   const current=()=>guildId===state.guildId&&requestId===autoModRequestId;
+  closeSelectPopup();
   autoModFields.disabled=true;
   autoModSelector.disabled=true;
   try{
@@ -857,13 +856,12 @@ async function saveAutoMod(method,body){
 }
 
 autoModSelector.onchange=selectAutoModRule;
-autoModRetry.onclick=()=>void loadAutoMod();
 $('#automod-type').onchange=updateAutoModFields;
 autoModForm.onsubmit=event=>{
   event.preventDefault();
   const type=Number($('#automod-type').value);
   const lines=selector=>$(selector).value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
-  const selected=selector=>[...$(selector).selectedOptions].map(option=>option.value);
+  const selected=selector=>$(selector).value.split(',').filter(Boolean);
   void saveAutoMod(autoModSelector.value===newAutoModRule?'POST':'PUT',{
     type,name:$('#automod-name').value,enabled:$('#automod-enabled').checked,
     keywords:lines('#automod-keywords'),patterns:lines('#automod-patterns'),allowList:lines('#automod-allow'),
@@ -951,7 +949,7 @@ function renderModeration(data){
   state.data.moderationEnabled=!!data.settings.enabled;renderModuleStatuses();
   
   for(const [selector,key] of [['#moderation-admin-role','admin_role_id'],['#moderation-moderator-role','moderator_role_id'],['#honeypot-exempt-roles','honeypot_exempt_role_ids']]){
-    const select=$(selector);select.innerHTML='<option value="">Not set</option>'+state.data.roles.map(role=>`<option value="${role.id}">@ ${escapeHtml(role.name)}</option>`).join('');syncBonusRoleSelect(select,data.settings[key]||'');
+    const select=$(selector);select.innerHTML='<option value="">Not set</option>'+state.data.roles.map(role=>`<option value="${role.id}">@ ${escapeHtml(role.name)}</option>`).join('');syncMultiPickerSelect(select,data.settings[key]||'');
   }
   $('#moderation-enabled').checked=!!data.settings.enabled;
   $('#warning-rules').innerHTML='';let rules=[];try{rules=JSON.parse(data.settings.warning_rules||'[]')}catch{};rules.forEach(addWarningRule);syncWarningRules();

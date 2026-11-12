@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard — Crazyland</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/dashboard.css?v=discord-automod"><link rel="stylesheet" href="/legal.css"><script src="/falling-gears.js" defer></script>
+<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard — Crazyland</title><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/dashboard.css?v=automod-required-fields"><link rel="stylesheet" href="/legal.css"><script src="/falling-gears.js" defer></script>
 </head>
 <body class="app has-falling-gears">
   <div class="falling-gears" aria-hidden="true"></div>
@@ -48,46 +48,40 @@
       </span>
     </summary>
     <p id="automod-status" role="status"></p>
-    <button id="automod-retry" class="outline hidden" type="button">Retry</button>
-    <label>Rule<select id="automod-rule" disabled><option value="" disabled selected>Select a rule</option></select></label>
+    <label>Rule<select id="automod-rule" disabled><option value="" disabled selected>Select a rule</option><option value="new">New rule</option></select></label>
     <form id="automod-form" class="hidden">
-      <fieldset id="automod-fields">
-        <div class="form-grid">
-          <label>Rule name<input id="automod-name" maxlength="100" required></label>
-          <label>Rule type<select id="automod-type">
-            <option value="1">Keywords and links</option><option value="3">Discord spam detection</option>
-            <option value="4">Discord word lists</option><option value="5">Mention spam</option>
-          </select></label>
-        </div>
-        <div data-automod-types="1">
-          <label>Blocked words and phrases<textarea id="automod-keywords" rows="4"></textarea><small>One per line. Use *discord.gg/* to match an invite link anywhere in a message.</small></label>
-          <label>Blocked regex patterns<textarea id="automod-patterns" rows="3"></textarea><small>One Rust regex pattern per line.</small></label>
-        </div>
-        <label data-automod-types="4">Word lists<select id="automod-presets" multiple size="3">
+      <fieldset id="automod-fields" class="form-grid">
+        <label>Rule name <span class="required-mark" aria-hidden="true">*</span><input id="automod-name" maxlength="100" required></label>
+        <label>Rule type <span class="required-mark" aria-hidden="true">*</span><select id="automod-type" required>
+          <option value="1">Keywords and links</option><option value="3">Discord spam detection</option>
+          <option value="4">Discord word lists</option><option value="5">Mention spam</option>
+        </select><small>Choose what Discord checks for. Use Keywords and links to define your own matches.</small></label>
+        <label class="automod-full-width" data-automod-types="1">Blocked words and phrases<textarea id="automod-keywords" rows="4"></textarea><small>One per line. Use *discord.gg/* to match an invite link anywhere in a message. <span class="required-mark" aria-hidden="true">*</span> At least one word, phrase, or regex pattern is required.</small></label>
+        <label class="automod-full-width" data-automod-types="1">Blocked regex patterns<textarea id="automod-patterns" rows="3"></textarea><small>Use one Rust regex pattern per line to match variations of a word or link.</small></label>
+        <label class="automod-full-width" data-automod-types="4">Word lists <span class="required-mark" aria-hidden="true">*</span><select id="automod-presets" data-multi-picker required>
+          <option value="">Select word lists</option>
           <option value="1">Profanity</option><option value="2">Sexual content</option><option value="3">Slurs</option>
-        </select></label>
-        <label data-automod-types="1 4">Allowed phrases<textarea id="automod-allow" rows="3"></textarea><small>One per line.</small></label>
-        <div data-automod-types="5">
-          <label>Maximum unique mentions<input id="automod-mention-limit" type="number" min="1" max="50" value="5"></label>
-          <label><input id="automod-raid" type="checkbox"> Detect mention raids</label>
+        </select><small>Choose one or more lists maintained by Discord.</small></label>
+        <label class="automod-full-width" data-automod-types="1 4">Allowed phrases<textarea id="automod-allow" rows="3"></textarea><small>Enter exceptions to this rule, one per line.</small></label>
+        <label class="automod-full-width" data-automod-types="5">Maximum unique mentions <span class="required-mark" aria-hidden="true">*</span><input id="automod-mention-limit" type="number" min="1" max="50" value="5" required><small>Discord blocks a message when it mentions more distinct users and roles than this limit.</small></label>
+        <div class="automod-full-width modal-toggle" data-automod-types="5"><div><b>Detect mention raids</b><small id="automod-raid-help">Let Discord automatically detect mention raids in addition to checking each message against the limit above.</small></div><label class="switch"><input id="automod-raid" type="checkbox" aria-label="Detect mention raids" aria-describedby="automod-raid-help"><span></span></label></div>
+        <label>Exempt roles<select id="automod-roles" data-multi-picker></select><small>Members with any selected role bypass this rule.</small></label>
+        <label>Exempt channels<select id="automod-channels" data-multi-picker></select><small>This rule skips messages in the selected channels.</small></label>
+        <label class="automod-full-width">Message shown when blocked<input id="automod-block-message" maxlength="150"><small>Optional. Discord shows this explanation to the member whose message was blocked.</small></label>
+        <label>Discord alert channel<select id="automod-alert"></select><small>Discord posts the flagged content to this channel, separately from Crazyland's moderation log.</small></label>
+        <label data-automod-types="1 5">Discord timeout in minutes<input id="automod-timeout" type="number" min="0" max="40320" value="0"><small>Discord applies this timeout when the rule triggers. Use 0 to skip the timeout.</small></label>
+        <div class="automod-full-width">
+          <div class="modal-toggle"><div><b>Issue a Crazyland warning</b><small id="automod-warn-help">With Moderation enabled and Crazyland online, a blocked message can add an active warning and send the member a DM. If the warning reaches a threshold set under Warning streak, Crazyland can apply the configured timeout, kick, or ban. Leave this off to record the block without adding a warning.</small></div><label class="switch"><input id="automod-warn" type="checkbox" aria-label="Issue a Crazyland warning" aria-describedby="automod-warn-help"><span></span></label></div>
+          <div class="modal-toggle"><div><b>Enable rule</b><small id="automod-enabled-help">When enabled, Discord blocks matching messages after you save, even if Crazyland is offline. Leave this off to save the rule with enforcement paused.</small></div><label class="switch"><input id="automod-enabled" type="checkbox" aria-label="Enable rule" aria-describedby="automod-enabled-help"><span></span></label></div>
+          <div class="settings-disclosure-actions">
+            <button id="automod-save" class="button" type="submit">Create rule</button>
+            <button id="automod-delete" class="outline hidden" type="button">Delete rule</button>
+          </div>
         </div>
-        <div class="form-grid">
-          <label>Exempt roles<select id="automod-roles" multiple size="4"></select></label>
-          <label>Exempt channels<select id="automod-channels" multiple size="4"></select></label>
-        </div>
-        <label>Message shown when blocked<input id="automod-block-message" maxlength="150"></label>
-        <div class="form-grid">
-          <label>Discord alert channel<select id="automod-alert"></select><small>Discord posts the flagged content here.</small></label>
-          <label data-automod-types="1 5">Discord timeout in minutes<input id="automod-timeout" type="number" min="0" max="40320" value="0"><small>Use 0 to skip the timeout.</small></label>
-        </div>
-        <label><input id="automod-warn" type="checkbox"> Issue a Crazyland warning and apply warning streak rules</label>
-        <label><input id="automod-enabled" type="checkbox"> Enable rule</label>
-        <button id="automod-save" type="submit">Create rule</button>
-        <button id="automod-delete" class="outline hidden" type="button">Delete rule</button>
       </fieldset>
     </form>
   </details>
 </div>
 </section>
 <section id="premium" class="panel hidden" aria-label="Premium"><details class="card settings-disclosure" data-disclosure="server-premium"><summary class="cardhead"><span><strong>Server premium</strong></span></summary></details></section>
-<nav class="legal-links dashboard-legal" aria-label="Legal"><a href="/privacy.html" target="_blank" rel="noopener">Privacy Policy</a><a href="/terms.html" target="_blank" rel="noopener">Terms of Service</a></nav></main><div id="system-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="system-modal-title"><button class="modal-backdrop" aria-label="Close"></button><div class="modal-card"><div class="modal-head"><div><small>LEVELING SYSTEM</small><h2 id="system-modal-title">System settings</h2></div><button id="close-system-modal" class="modal-close" aria-label="Close">×</button></div><label>System name<input id="modal-system-name" maxlength="50"></label><div class="modal-toggle"><div><b>System enabled</b><small>Members can earn XP in this system.</small></div><label class="switch"><input id="modal-system-enabled" type="checkbox"><span></span></label></div><div class="template-zone"><div><b>Use another system as template</b><small>Copies settings and rewards without copying member XP.</small></div><div class="template-controls"><div class="template-select-wrap"><select id="template-system"></select><span id="template-placeholder">No system selected</span></div><button id="apply-template" disabled>Apply template</button></div><p class="template-warning hidden">Applying replaces this system's settings, access rules, announcements, and role rewards. Member XP is kept.</p></div><div class="danger-zone"><div><b>Delete leveling system</b><small>This permanently removes its XP and settings.</small></div><button id="modal-delete-system">Delete system</button></div></div></div><script src="/dashboard.js?v=automod-rule-select"></script></body></html>
+<nav class="legal-links dashboard-legal" aria-label="Legal"><a href="/privacy.html" target="_blank" rel="noopener">Privacy Policy</a><a href="/terms.html" target="_blank" rel="noopener">Terms of Service</a></nav></main><div id="system-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="system-modal-title"><button class="modal-backdrop" aria-label="Close"></button><div class="modal-card"><div class="modal-head"><div><small>LEVELING SYSTEM</small><h2 id="system-modal-title">System settings</h2></div><button id="close-system-modal" class="modal-close" aria-label="Close">×</button></div><label>System name<input id="modal-system-name" maxlength="50"></label><div class="modal-toggle"><div><b>System enabled</b><small>Members can earn XP in this system.</small></div><label class="switch"><input id="modal-system-enabled" type="checkbox"><span></span></label></div><div class="template-zone"><div><b>Use another system as template</b><small>Copies settings and rewards without copying member XP.</small></div><div class="template-controls"><div class="template-select-wrap"><select id="template-system"></select><span id="template-placeholder">No system selected</span></div><button id="apply-template" disabled>Apply template</button></div><p class="template-warning hidden">Applying replaces this system's settings, access rules, announcements, and role rewards. Member XP is kept.</p></div><div class="danger-zone"><div><b>Delete leveling system</b><small>This permanently removes its XP and settings.</small></div><button id="modal-delete-system">Delete system</button></div></div></div><script src="/dashboard.js?v=automod-shared-controls"></script></body></html>
