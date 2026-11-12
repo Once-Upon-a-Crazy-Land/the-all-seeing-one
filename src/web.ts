@@ -63,28 +63,39 @@ function leaderboardProfile(userId: string) {
   return value;
 }
 
-app.get("/invite", (_req, res) => {
-  const query = new URLSearchParams({ client_id: config.clientId, permissions: "268504064", scope: "bot applications.commands" });
-  res.redirect(`https://discord.com/oauth2/authorize?${query}`);
-});
-
-app.get("/auth/discord", (req, res) => {
+function authorizeDiscord(req: Request, res: Response, install: boolean) {
   const state = crypto.randomBytes(24).toString("hex");
   req.session!.oauthState = state;
+  req.session!.oauthInstall = install;
   const query = new URLSearchParams({ client_id: config.clientId, redirect_uri: config.redirectUri, response_type: "code", scope: "identify guilds", state });
+  if (install) {
+    query.set("scope", "bot applications.commands identify guilds");
+    query.set("permissions", "268504064");
+    query.set("integration_type", "0");
+  }
   res.redirect(`https://discord.com/oauth2/authorize?${query}`);
-});
+}
+
+app.get("/invite", (req, res) => authorizeDiscord(req, res, true));
+app.get("/auth/discord", (req, res) => authorizeDiscord(req, res, false));
 
 app.get("/auth/discord/callback", async (req, res) => {
   if (!req.query.code || req.query.state !== req.session?.oauthState) return res.status(400).send("Invalid OAuth state");
   const body = new URLSearchParams({ client_id: config.clientId, client_secret: config.clientSecret, grant_type: "authorization_code", code: String(req.query.code), redirect_uri: config.redirectUri });
   const tokenResponse = await fetch("https://discord.com/api/v10/oauth2/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
   if (!tokenResponse.ok) return res.status(502).send("Discord sign-in failed");
-  const token = await tokenResponse.json() as { access_token: string };
+  const token = await tokenResponse.json() as { access_token: string; guild?: { id: string } };
   const user = await api("/users/@me", token.access_token) as { id: string; username: string; avatar: string | null };
+  guildCache.delete(user.id);
   req.session!.user = { ...user, accessToken: token.access_token };
+  const guildId = req.session!.oauthInstall ? token.guild?.id ?? req.query.guild_id : undefined;
   delete req.session!.oauthState;
-  res.redirect("/dashboard.html");
+  delete req.session!.oauthInstall;
+  // The dashboard only selects this hint if it appears in the manageable, installed server list.
+  const dashboard = typeof guildId === "string" && /^\d{17,20}$/.test(guildId)
+    ? "/dashboard.html?" + new URLSearchParams({ guild: guildId, installed: "1" })
+    : "/dashboard.html";
+  res.redirect(dashboard);
 });
 
 app.post("/auth/logout", (req, res) => { if (req.session?.user) guildCache.delete(req.session.user.id); req.session = null; res.status(204).end(); });

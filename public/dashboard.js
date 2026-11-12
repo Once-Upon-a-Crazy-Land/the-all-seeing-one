@@ -23,7 +23,7 @@ const emojiCategoryIcons={people:'😀',nature:'🌿',foods:'🍕',activity:'⚽
 const excludedUnicodeEmojiIds=new Set(['rightwards_hand','leftwards_hand','palm_down_hand','palm_up_hand']);
 const availableCurrencyEmojis=()=>[...globalEmojis,...(state.data?.emojis||[])];
 async function request(url, options) {const economySave=options?.method==='PUT'&&/\/economy$/.test(url)&&options.body&&state.economySystemId;if(economySave){const body=JSON.parse(options.body);body.systemId=state.economySystemId;options={...options,body:JSON.stringify(body)}} const response = await fetch(url, options); if (response.status === 401) location.href = '/auth/discord'; if (response.status === 204) return null; const json = await response.json(); if (!response.ok) throw new Error(json.error);if(economySave){const system=state.data?.economySystems?.find(entry=>entry.id===state.economySystemId);if(system)Object.assign(system,{currency_symbol:json.currencySymbol,starting_balance:json.startingBalance,max_cash_balance:json.maxCashBalance,max_bank_balance:json.maxBankBalance,config:json.config})} return json; }
-async function boot() { try { const [me,guilds,meta,emojiData]=await Promise.all([request('/api/me'),request('/api/guilds'),request('/api/meta'),request('/assets/emoji-data.json')]); unicodeEmojiGroups=Object.fromEntries(emojiData.categories.map(category=>[category.id,category.emojis.filter(id=>!excludedUnicodeEmojiIds.has(id)).map(id=>emojiData.emojis[id]).filter(Boolean).map(item=>({emoji:item.skins[0].native,unified:item.skins[0].unified.toLowerCase(),name:item.name,keywords:item.keywords||[]}))]));renderEmojiCategoryNav(); renderRailProfile(me); restoreSettingsDisclosures(me.id); const installed=guilds.filter(g=>g.installed); renderServerRail(installed,meta.clientId); if(!installed.length){$('#loading').innerHTML=`No manageable server has this bot installed yet.<br><a class="button" href="https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(meta.clientId)}&permissions=268504064&scope=bot">Add it to a server</a>`;return} await restoreDashboardView(me.id, installed); } catch(error){$('#loading').textContent=error.message} }
+async function boot() { try { const [me,guilds,emojiData]=await Promise.all([request('/api/me'),request('/api/guilds'),request('/assets/emoji-data.json')]); unicodeEmojiGroups=Object.fromEntries(emojiData.categories.map(category=>[category.id,category.emojis.filter(id=>!excludedUnicodeEmojiIds.has(id)).map(id=>emojiData.emojis[id]).filter(Boolean).map(item=>({emoji:item.skins[0].native,unified:item.skins[0].unified.toLowerCase(),name:item.name,keywords:item.keywords||[]}))]));renderEmojiCategoryNav(); renderRailProfile(me); restoreSettingsDisclosures(me.id); const installed=await installedDashboardGuilds(guilds); renderServerRail(installed); if(!installed.length){$('#loading').innerHTML=`No manageable server has this bot installed yet.<br><a class="button" href="/invite">Add it to a server</a>`;return} await restoreDashboardView(me.id, installed); } catch(error){$('#loading').textContent=error.message} }
 async function loadGuild(id,preferredId,preferredEconomyId){ document.querySelectorAll('[data-module-toggle]').forEach(toggle=>toggle.disabled=true); $('#loading').classList.remove('hidden'); document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden')); state.guildId=id; syncServerRail(); state.data=await request(`/api/guilds/${id}/settings`); if(preferredEconomyId && state.data.economySystems.some(system=>system.id===preferredEconomyId))state.economySystemId=preferredEconomyId; state.systemId=preferredId&&state.data.systems.some(s=>s.id===preferredId)?preferredId:state.data.systems[0].id; $('#member-count').textContent=state.data.memberCount.toLocaleString(); const options=state.data.channels.map(c=>`<option value="${c.id}"># ${escapeHtml(c.name)}</option>`).join(''); const roleOptions=state.data.roles.map(r=>`<option value="${r.id}">@ ${escapeHtml(r.name)}</option>`).join(''); $('#channel').innerHTML='<option value="">Select a channel</option>'+options; $('#allowed-channels').innerHTML=options; $('#denied-channels').innerHTML=options; $('#allowed-roles').innerHTML=roleOptions; $('#denied-roles').innerHTML=roleOptions; renderPremium(); renderSystemSelect(); await selectSystem(state.systemId); $('#loading').classList.add('hidden'); $('#level-tabs').classList.remove('hidden'); $('#system-toolbar').classList.remove('hidden'); await showSection(document.querySelector('.tab.active')?.dataset.section||'levels'); }
 function renderModuleStatuses(){
   const data = state.data;
@@ -901,6 +901,18 @@ const dashboardTabs = {
   moderation: ['.moderation-child', 'moderationPage']
 };
 
+async function installedDashboardGuilds(guilds) {
+  const query = new URLSearchParams(location.search);
+  const target = query.get('guild');
+  if (query.get('installed') === '1' && guilds.some(guild => guild.id === target)) {
+    for (let attempt = 0; attempt < 8 && !guilds.some(guild => guild.id === target && guild.installed); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 750));
+      guilds = await request('/api/guilds');
+    }
+  }
+  return guilds.filter(guild => guild.installed);
+}
+
 async function restoreDashboardView(userId, guilds) {
   const key = 'crazyland:dashboard:view:' + userId;
   let saved;
@@ -960,7 +972,7 @@ function syncServerRail(){
     if(active)button.setAttribute('aria-current','true');else button.removeAttribute('aria-current');
   });
 }
-function renderServerRail(guilds,clientId){
+function renderServerRail(guilds){
   const list=$('#server-rail-list');list.replaceChildren();
   for(const guild of guilds){
     const button=document.createElement('button');button.type='button';button.className='server-rail-button';button.dataset.serverId=guild.id;button.title=guild.name;button.setAttribute('aria-label',guild.name);
@@ -969,7 +981,7 @@ function renderServerRail(guilds,clientId){
     }else button.textContent=guild.name.slice(0,1).toUpperCase();
     button.onclick=()=>switchServer(guild.id);list.append(button);
   }
-  const invite=$('#server-rail-invite');invite.href='https://discord.com/oauth2/authorize?client_id='+encodeURIComponent(clientId)+'&permissions=268504064&scope=bot';invite.classList.remove('hidden');syncServerRail();
+  const invite=$('#server-rail-invite');invite.href='/invite';invite.classList.remove('hidden');syncServerRail();
 }
 
 function renderRailProfile(user) {

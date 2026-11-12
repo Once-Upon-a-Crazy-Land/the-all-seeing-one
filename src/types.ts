@@ -5,6 +5,7 @@ declare global {
     interface CookieSessionObject {
       user?: SessionUser;
       oauthState?: string;
+      oauthInstall?: boolean;
     }
   }
 }
