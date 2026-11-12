@@ -222,4 +222,13 @@ bot.once(Events.ClientReady, async client => {
   console.log(`Discord server names: ${JSON.stringify(serverNames)}`);
   await client.application.commands.set([levelCommand.toJSON(), ...economyCommands.map(command => command.toJSON()), ...moderationCommands.map(command => command.toJSON())]);
 });
+
+bot.on(Events.GuildCreate, guild => {
+  console.log(`Discord bot joined ${JSON.stringify(guild.name)} (${guild.id}). Server count: ${bot.guilds.cache.size}`);
+});
+
+bot.on(Events.GuildDelete, guild => {
+  console.log(`Discord bot left ${JSON.stringify(guild.name)} (${guild.id}). Server count: ${bot.guilds.cache.size}`);
+});
+
 export const startBot = () => bot.login(config.token);
