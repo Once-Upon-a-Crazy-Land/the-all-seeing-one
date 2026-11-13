@@ -71,7 +71,10 @@ function authorizeDiscord(req: Request, res: Response, install: boolean) {
   const query = new URLSearchParams({ client_id: config.clientId, redirect_uri: config.redirectUri, response_type: "code", scope: "identify guilds", state });
   if (install) {
     query.set("scope", "bot applications.commands identify guilds");
-    query.set("permissions", "268504064");
+    const permissions = PermissionFlagsBits.ManageRoles | PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.SendMessages | PermissionFlagsBits.ReadMessageHistory |
+      PermissionFlagsBits.ManageGuild | PermissionFlagsBits.ModerateMembers | PermissionFlagsBits.ViewAuditLog;
+    query.set("permissions", permissions.toString());
     query.set("integration_type", "0");
   }
   res.redirect(`https://discord.com/oauth2/authorize?${query}`);

@@ -25,7 +25,7 @@ The economy supports message rewards and a single `/economy` command with an act
    npm run dev
    ```
 
-6. Invite the bot with the `bot` scope and these permissions: View Channels, Send Messages, Read Message History, and Manage Roles. Put its Discord role above every reward role it should grant.
+6. Invite the bot with the `bot` scope. The website invite requests View Channels, Send Messages, Read Message History, Manage Roles, Manage Server for AutoMod, Moderate Members for timeouts, and View Audit Log for timeout logging. Put the bot's Discord role above every reward role it should grant.
 7. Open `http://localhost:3000`, sign in with Discord, select your server, and configure leveling.
 
 ## Moderation
