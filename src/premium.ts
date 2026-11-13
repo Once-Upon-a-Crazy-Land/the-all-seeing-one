@@ -92,7 +92,7 @@ export async function createPremiumSubscription(guildId: string, userId: string,
     }
     const result=await paypal("/v1/billing/subscriptions","POST",{
       plan_id:config.paypal.planId,custom_id:guildId,
-      application_context:{shipping_preference:"NO_SHIPPING",user_action:"SUBSCRIBE_NOW",return_url:origin+"/dashboard.html?premium=return&guild="+guildId,cancel_url:origin+"/dashboard.html?premium=cancel&guild="+guildId}
+      application_context:{shipping_preference:"NO_SHIPPING",user_action:"SUBSCRIBE_NOW",return_url:origin+`/manage/${guildId}/modules/premium?premium=return`,cancel_url:origin+`/manage/${guildId}/modules/premium?premium=cancel`}
     },crypto.randomUUID());
     const approval=new URL(result.links?.find((link:any)=>link.rel==='approve')?.href);
     if(!/^I-[A-Z0-9]+$/.test(result.id)||approval.origin!==approvalOrigin()||approval.username||approval.password)throw new Error("Invalid PayPal response");

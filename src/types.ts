@@ -6,6 +6,7 @@ declare global {
       user?: SessionUser;
       oauthState?: string;
       oauthInstall?: boolean;
+      dashboardReturn?: string;
     }
   }
 }

@@ -22,6 +22,14 @@ if (config.redirectUri.startsWith("https://")) app.set("trust proxy", 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json());
 app.use(cookieSession({ name: "crazyland", keys: [config.sessionSecret], httpOnly: true, sameSite: "lax", secure: config.redirectUri.startsWith("https://"), maxAge: 7 * 864e5 }));
+app.get("/dashboard.html", (req, res) => res.redirect("/manage" + req.originalUrl.slice(req.path.length)));
+app.get(["/manage", /^\/manage\/\d{17,20}\/modules\/(levels|economy|moderation|tools|premium)\/?$/], (req, res) => {
+  if (!req.session?.user) {
+    req.session!.dashboardReturn = req.originalUrl;
+    return authorizeDiscord(req, res, false);
+  }
+  res.sendFile(path.resolve("public/dashboard.html"));
+});
 app.use(express.static("public"));
 app.get("/assets/emoji-data.json", (_req, res) => res.sendFile(path.resolve("node_modules/@emoji-mart/data/sets/15/native.json")));
 app.use("/assets/emoji-twitter", express.static(path.resolve("node_modules/emoji-datasource-twitter/img/twitter/64"), { immutable: true, maxAge: "30d" }));
@@ -82,8 +90,11 @@ function authorizeDiscord(req: Request, res: Response, install: boolean) {
   res.redirect(`https://discord.com/oauth2/authorize?${query}`);
 }
 
-app.get("/invite", (req, res) => authorizeDiscord(req, res, true));
-app.get("/auth/discord", (req, res) => authorizeDiscord(req, res, false));
+app.get("/invite", (req, res) => {
+  delete req.session!.dashboardReturn;
+  authorizeDiscord(req, res, true);
+});
+app.get("/auth/discord", (req, res) => res.redirect("/manage"));
 
 app.get("/auth/discord/callback", async (req, res) => {
   if (!req.query.code || req.query.state !== req.session?.oauthState) return res.status(400).send("Invalid OAuth state");
@@ -95,12 +106,14 @@ app.get("/auth/discord/callback", async (req, res) => {
   guildCache.delete(user.id);
   req.session!.user = { ...user, accessToken: token.access_token };
   const guildId = req.session!.oauthInstall ? token.guild?.id ?? req.query.guild_id : undefined;
+  const dashboardReturn = req.session!.dashboardReturn;
   delete req.session!.oauthState;
   delete req.session!.oauthInstall;
+  delete req.session!.dashboardReturn;
   // The dashboard only selects this hint if it appears in the manageable, installed server list.
   const dashboard = typeof guildId === "string" && /^\d{17,20}$/.test(guildId)
-    ? "/dashboard.html?" + new URLSearchParams({ guild: guildId, installed: "1" })
-    : "/dashboard.html";
+    ? `/manage/${guildId}/modules/levels?installed=1`
+    : dashboardReturn ?? "/manage";
   res.redirect(dashboard);
 });
 

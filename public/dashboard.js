@@ -31,7 +31,7 @@ async function request(url, options) {
   }
   const response=await fetch(url,options);
   if(response.status===401){
-    location.href='/auth/discord';
+    location.href=location.pathname+location.search;
     throw new Error('Sign in required.');
   }
   if(response.status===204)return null;
@@ -141,7 +141,11 @@ function showSection(section){
   else if(section==='tools'){$('#tools').classList.remove('hidden');$('#title').textContent='Tools';$('#crumb').textContent='DASHBOARD / TOOLS';return loadEmbedChannels()}
   else if(section==='moderation'){$('#moderation').classList.remove('hidden');showModerationPage(document.querySelector('.moderation-child.active')?.dataset.moderationPage||'overview');return loadModeration()}
 }
-document.querySelectorAll('.tab').forEach(button=>button.onclick=()=>showSection(button.dataset.section));
+document.querySelectorAll('.tab').forEach(button=>button.onclick=()=>{
+  if (!state.data || serverSwitchPending) return;
+  showSection(button.dataset.section);
+  updateDashboardUrl('pushState');
+});
 
 const embedForm = $('#embed-composer');
 const embedChannels = $('#embed-channel');
@@ -1620,7 +1624,7 @@ async function finishPremiumCheckout(){
   if(query.has('premium'))showSection('premium');
   if(query.get('premium')==='cancel'){history.replaceState({},'',location.pathname);showSaveToast('PayPal checkout cancelled');return}
   if(query.get('premium')!=='return')return;
-  const guildId=query.get('guild');if(state.guildId!==guildId)return;
+  const guildId=dashboardRoute().guildId??query.get('guild');if(state.guildId!==guildId)return;
   const retry=$('#retry-premium');retry.disabled=true;
   try{const premium=await request('/api/guilds/'+guildId+'/premium/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscriptionId:query.get('subscription_id')||''})});if(state.guildId!==guildId)return;state.data.premium=premium;history.replaceState({},'',location.pathname);retry.classList.add('hidden');renderPremium();renderSystemSelect();renderEconomySystemSelect();showSaveToast('Premium activated')}
   catch(error){retry.classList.remove('hidden');showSaveToast(error.message,true)}finally{retry.disabled=false}
@@ -1634,9 +1638,21 @@ const dashboardTabs = {
   moderation: ['.moderation-child', 'moderationPage']
 };
 
+function dashboardRoute() {
+  const match = location.pathname.match(/^\/manage\/(\d{17,20})\/modules\/([a-z]+)\/?$/);
+  return { guildId: match?.[1], section: match?.[2] };
+}
+
+function updateDashboardUrl(method) {
+  const section = document.querySelector('.tab.active').dataset.section;
+  const path = `/manage/${state.guildId}/modules/${section}`;
+  const url = path + (method === 'replaceState' ? location.search : '');
+  if (url !== location.pathname + location.search) history[method](null, '', url);
+}
+
 async function installedDashboardGuilds(guilds) {
   const query = new URLSearchParams(location.search);
-  const target = query.get('guild');
+  const target = dashboardRoute().guildId ?? query.get('guild');
   if (query.get('installed') === '1' && guilds.some(guild => guild.id === target)) {
     for (let attempt = 0; attempt < 8 && !guilds.some(guild => guild.id === target && guild.installed); attempt++) {
       await new Promise(resolve => setTimeout(resolve, 750));
@@ -1656,16 +1672,27 @@ async function restoreDashboardView(userId, guilds) {
   }
 
   const query = new URLSearchParams(location.search);
-  const guildId = [query.get('guild'), saved?.guildId].find(id => guilds.some(guild => guild.id === id)) ?? guilds[0].id;
+  const route = dashboardRoute();
+  const requestedGuild = route.guildId ?? query.get('guild');
+  const guildId = [requestedGuild, saved?.guildId].find(id => guilds.some(guild => guild.id === id)) ?? guilds[0].id;
   const view = saved?.guildId === guildId && !query.has('premium') ? saved : null;
   for (const [name, [selector, field]] of Object.entries(dashboardTabs)) {
     const buttons = [...document.querySelectorAll(selector)];
-    const active = buttons.find(button => button.dataset[field] === view?.tabs?.[name]);
+    const section = name === 'section' && requestedGuild === guildId ? route.section : undefined;
+    const active = buttons.find(button => button.dataset[field] === (section ?? view?.tabs?.[name]));
     if (active) buttons.forEach(button => button.classList.toggle('active', button === active));
   }
 
   await loadGuild(guildId, view?.systemId, view?.economySystemId);
   await finishPremiumCheckout();
+  if (query.get('installed') === '1') history.replaceState(null, '', location.pathname);
+  updateDashboardUrl('replaceState');
+  window.addEventListener('popstate', async () => {
+    const { guildId, section } = dashboardRoute();
+    if (!guilds.some(guild => guild.id === guildId)) return;
+    if (guildId !== state.guildId) await switchServer(guildId);
+    if (guildId === state.guildId && section !== $('.tab.active').dataset.section) await showSection(section);
+  });
   if (Number.isFinite(view?.scrollY)) {
     requestAnimationFrame(() => window.scrollTo({ top: view.scrollY, behavior: 'instant' }));
   }
@@ -1712,7 +1739,12 @@ function renderServerRail(guilds){
     if(guild.icon&&/^\d+$/.test(guild.id)&&/^[a-zA-Z0-9_]+$/.test(guild.icon)){
       const image=document.createElement('img');image.src='https://cdn.discordapp.com/icons/'+guild.id+'/'+guild.icon+'.png?size=80';image.alt='';image.addEventListener('error',()=>{button.textContent=guild.name.slice(0,1).toUpperCase();});button.append(image);
     }else button.textContent=guild.name.slice(0,1).toUpperCase();
-    button.onclick=()=>switchServer(guild.id);list.append(button);
+    button.onclick=async()=>{
+      if (serverSwitchPending || !state.data || state.guildId === guild.id) return;
+      await switchServer(guild.id);
+      if (state.guildId === guild.id) updateDashboardUrl('pushState');
+    };
+    list.append(button);
   }
   const invite=$('#server-rail-invite');invite.href='/invite';invite.classList.remove('hidden');syncServerRail();
 }
