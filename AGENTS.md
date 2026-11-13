@@ -1,6 +1,13 @@
+# Dashboard controls
+
+Use the dashboard's styled buttons and switches. Avoid browser-default button styles and visible native checkboxes. Keep switches keyboard accessible.
+
+Display editable text as entered, preserving uppercase and lowercase letters.
+Keep scrollbars hidden in editable text fields, including multiline fields. Keep overflow text reachable through normal editing and scrolling.
+
 # Bot message formatting
 
-Use bold, normal-sized headings for embedded bot messages and Components V2 containers. Place a separator line immediately after the heading, before the body. Do not use Markdown heading prefixes.
+Use bold, normal-sized headings for embedded bot messages and Components V2 containers. Place a native separator immediately after the heading in Components V2 containers, before the body. In Tools, the divider is optional for Components V2 and unavailable for regular embeds. Do not use Markdown heading prefixes.
 
 All moderation DMs are description-only embeds with color #f45f77: no heading, separator, icon, case number, or internal error details. Warning DMs read "You were warned in [server] for [reason]", with an optional message link below. Clear-case DMs read "Warning '[original warning reason]' has been cleared from you".
 

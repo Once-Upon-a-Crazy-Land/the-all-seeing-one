@@ -28,6 +28,8 @@ The economy supports message rewards and a single `/economy` command with an act
 6. Invite the bot with the `bot` scope. The website invite requests View Channels, Send Messages, Read Message History, Manage Roles, Manage Server for AutoMod, Moderate Members for timeouts, and View Audit Log for timeout logging. Put the bot's Discord role above every reward role it should grant.
 7. Open `http://localhost:3000`, sign in with Discord, select your server, and configure leveling.
 
+The dashboard's **Tools** tab lets you compose a Discord embed and send it as the bot. Choose a text or announcement channel where both you and the bot have View Channel, Send Messages, and Embed Links permissions. If you use a different local port, set `DISCORD_REDIRECT_URI` to that localhost callback and register the exact URL in the Discord Developer Portal.
+
 ## Moderation
 
 Use `/mod` and select an action, then fill in its form: `/mod - Warn member`, `/mod - Modlogs`, `/mod - Clear case`, `/mod - Timeout member`, `/mod - Remove timeout`, `/mod - Kick member`, `/mod - Ban member`, `/mod - Unban user`, and `/mod - Purge messages`. Warnings and completed actions are saved as moderation cases; clearing warnings preserves their history.

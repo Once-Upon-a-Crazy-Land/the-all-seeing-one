@@ -138,9 +138,571 @@ function showSection(section){
   if(economy){renderEconomySystemSelect();switchEconomySystem(state.economySystemId);renderEconomyIssues();$('#economy').classList.remove('hidden');return showEconomyPage(document.querySelector('.economy-child.active')?.dataset.economyPage||'general')}
   else if(levels)showTab(document.querySelector('#level-tabs .level-tab.active')?.dataset.tab||'overview');
   else if(section==='premium'){$('#premium').classList.remove('hidden');$('#title').textContent='Premium';$('#crumb').textContent='DASHBOARD / PREMIUM';renderPremium()}
+  else if(section==='tools'){$('#tools').classList.remove('hidden');$('#title').textContent='Tools';$('#crumb').textContent='DASHBOARD / TOOLS';return loadEmbedChannels()}
   else if(section==='moderation'){$('#moderation').classList.remove('hidden');showModerationPage(document.querySelector('.moderation-child.active')?.dataset.moderationPage||'overview');return loadModeration()}
 }
 document.querySelectorAll('.tab').forEach(button=>button.onclick=()=>showSection(button.dataset.section));
+
+const embedForm = $('#embed-composer');
+const embedChannels = $('#embed-channel');
+const embedFields = $('#embed-fields');
+let embedChannelError = '';
+const embedPreview = $('#embed-preview');
+const savedEmbedSelect = $('#embed-saved');
+const savedEmbedName = $('#embed-saved-name');
+const embedV2 = $('#embed-v2');
+const embedDivider = $('#embed-divider');
+let embedChannelLoad = 0;
+let embedDraftGuild;
+let embedSending = false;
+let pendingEmbedSend;
+let editingEmbed;
+let loadingEmbed = false;
+const embedUrl = guildId => `/api/guilds/${guildId}/tools/embeds`;
+const updateEmbedFieldLimit = () => { $('#add-embed-field').disabled = embedFields.children.length >= 25; };
+
+function readEmbedDraft() {
+  const draft = Object.fromEntries(new FormData(embedForm));
+  draft.fields = [...embedFields.children].map(row => ({
+    name: row.querySelector('[data-field="name"]').value,
+    value: row.querySelector('[data-field="value"]').value,
+    inline: row.querySelector('[data-field="inline"]').checked
+  }));
+  return draft;
+}
+
+function embedPreviewUrl(value) {
+  try {
+    const url = new URL(value);
+    if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.href;
+  } catch {}
+  return '';
+}
+
+function renderEmbedMarkdown(target, value) {
+  const formats = {
+    '***': ['strong', 'em'], '**': ['strong'], '*': ['em'],
+    '__': ['u'], '_': ['em'], '~~': ['s'], '||': ['button']
+  };
+
+  function inline(parent, source, depth = 0) {
+    if (depth >= 12) {
+      parent.append(source);
+      return;
+    }
+    const tokens = /\\([\\\x60*_~|])|(`+)(.+?)\2|(\*\*\*|\*\*|__|~~|\|\||\*|_)(?=\S)(.+?\S|\S)\4/gs;
+    let offset = 0;
+    for (const match of source.matchAll(tokens)) {
+      parent.append(source.slice(offset, match.index));
+      if (match[1]) {
+        parent.append(match[1]);
+      } else if (match[2]) {
+        const code = document.createElement('code');
+        code.textContent = match[3];
+        parent.append(code);
+      } else {
+        let node = parent;
+        for (const tag of formats[match[4]]) {
+          const child = document.createElement(tag);
+          node.append(child);
+          node = child;
+        }
+        if (match[4] === '||') {
+          node.type = 'button';
+          node.className = 'embed-preview-spoiler';
+          node.setAttribute('aria-label', 'Reveal spoiler');
+          node.onclick = () => {
+            node.classList.add('revealed');
+            node.removeAttribute('aria-label');
+          };
+          node.textContent = match[5];
+        } else {
+          inline(node, match[5], depth + 1);
+        }
+      }
+      offset = match.index + match[0].length;
+    }
+    parent.append(source.slice(offset));
+  }
+
+  const blocks = value.split(/(```[^\n`]*\n[\s\S]*?```)/);
+  for (const [index, block] of blocks.entries()) {
+    if (index % 2) {
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      code.textContent = block.slice(block.indexOf('\n') + 1, -3).replace(/\n$/, '');
+      pre.append(code);
+      target.append(pre);
+      continue;
+    }
+    const lines = block.split('\n');
+    const listItem = /^( *)[-*] (.+)$/;
+    for (let line = 0; line < lines.length;) {
+      if (listItem.test(lines[line])) {
+        const list = document.createElement('ul');
+        const levels = [{ list, indent: lines[line].match(listItem)[1].length, item: null }];
+        while (line < lines.length && listItem.test(lines[line])) {
+          const [, spaces, content] = lines[line++].match(listItem);
+          const indent = spaces.length;
+          while (levels.length > 1 && indent < levels.at(-1).indent) levels.pop();
+          let level = levels.at(-1);
+          if (indent >= level.indent + 2 && level.item) {
+            const nested = document.createElement('ul');
+            level.item.append(nested);
+            level = { list: nested, indent, item: null };
+            levels.push(level);
+          }
+          const item = document.createElement('li');
+          inline(item, content);
+          level.list.append(item);
+          level.item = item;
+        }
+        target.append(list);
+      } else if (/^(?:>|>>>) /.test(lines[line])) {
+        const quote = document.createElement('blockquote');
+        const quoted = [];
+        if (lines[line].startsWith('>>> ')) {
+          quoted.push(lines[line++].slice(4), ...lines.slice(line));
+          line = lines.length;
+        } else {
+          while (line < lines.length && lines[line].startsWith('> ')) quoted.push(lines[line++].slice(2));
+        }
+        inline(quote, quoted.join('\n'));
+        target.append(quote);
+      } else {
+        const plain = [];
+        while (line < lines.length && !/^(?:>|>>>) /.test(lines[line]) && !listItem.test(lines[line])) plain.push(lines[line++]);
+        inline(target, plain.join('\n'));
+      }
+    }
+  }
+}
+
+function renderEmbedPreview() {
+  if (editingEmbed?.v2) {
+    embedPreview.replaceChildren();
+    embedPreview.classList.remove('hidden');
+    embedPreview.classList.add('embed-preview-v2');
+    embedPreview.style.borderColor = '';
+    $('#embed-preview-empty').classList.add('hidden');
+    for (const field of embedEditFields.querySelectorAll('textarea')) {
+      const block = document.createElement('div');
+      block.className = 'embed-preview-text';
+      renderEmbedMarkdown(block, field.value);
+      embedPreview.append(block);
+    }
+    return;
+  }
+  const v2 = embedV2.checked;
+  const linkButton = v2 && $('#embed-link-button').checked;
+  embedForm.elements.namedItem('description').required = linkButton;
+  $('#embed-v2-accessory').classList.toggle('hidden', !v2);
+  $('#embed-link-settings').classList.toggle('hidden', !linkButton);
+  for (const selector of ['#embed-link-label', '#embed-link-url']) {
+    $(selector).disabled = !linkButton;
+    $(selector).required = linkButton;
+  }
+  embedForm.elements.namedItem('thumbnail').disabled = linkButton;
+  $('#embed-color').disabled = !$('#embed-accent').checked;
+  const draft = readEmbedDraft();
+  embedForm.elements.namedItem('authorName').required = !!(draft.authorUrl.trim() || draft.authorIcon?.trim());
+  embedForm.elements.namedItem('title').required = !!draft.url.trim();
+  embedForm.elements.namedItem('footerText').required = !!draft.footerIcon?.trim();
+  $('#embed-divider-option').classList.toggle('hidden', !v2);
+  $('#embed-v2-help').classList.toggle('hidden', !v2);
+  embedDivider.disabled = !v2;
+  for (const name of ['authorIcon', 'footerIcon']) embedForm.elements.namedItem(name).disabled = v2;
+  for (const field of embedFields.querySelectorAll('[data-field="inline"]')) field.disabled = v2;
+  for (const field of $('#tools').querySelectorAll('[data-embed-missing]')) {
+    if (!isMissingEmbedField(field)) {
+      field.removeAttribute('data-embed-missing');
+      field.removeAttribute('aria-invalid');
+    }
+  }
+  embedPreview.classList.toggle('embed-preview-v2', v2);
+  embedPreview.replaceChildren();
+  const color = draft.color?.trim() || '';
+  embedPreview.style.borderColor = /^#[0-9a-f]{6}$/i.test(color) ? color : '';
+  function element(parent, tag, className, value = '') {
+    const node = document.createElement(tag);
+    node.className = className;
+    node.textContent = value;
+    parent.append(node);
+    return node;
+  }
+  function image(parent, value, className, alt = '') {
+    const url = embedPreviewUrl(value);
+    if (!url) return;
+    const img = element(parent, 'img', className);
+    img.alt = alt;
+    img.referrerPolicy = 'no-referrer';
+    img.onerror = () => img.classList.add('hidden');
+    img.src = url;
+  }
+  function linkedText(parent, value, link, className) {
+    const url = embedPreviewUrl(link);
+    const node = element(parent, url ? 'a' : 'div', className, value.trim());
+    if (url) {
+      node.href = url;
+      node.target = '_blank';
+      node.rel = 'noopener noreferrer';
+    }
+  }
+
+  const content = document.createDocumentFragment();
+  if (draft.authorName.trim()) {
+    const author = element(content, 'div', 'embed-preview-meta');
+    if (!v2) image(author, draft.authorIcon, 'embed-preview-icon');
+    linkedText(author, draft.authorName, draft.authorUrl, 'embed-preview-author');
+  }
+  if (draft.title.trim()) {
+    linkedText(content, draft.title, draft.url, 'embed-preview-title');
+    if (v2 && embedDivider.checked) element(content, 'hr', 'embed-preview-divider');
+  }
+  const thumbnail = embedPreviewUrl(draft.thumbnail);
+  if (draft.description.trim()) {
+    const section = v2 ? element(content, 'div', 'embed-preview-section') : content;
+    renderEmbedMarkdown(element(section, 'div', 'embed-preview-text'), draft.description.trim());
+    if (linkButton) {
+      const label = $('#embed-link-label').value.trim() || 'Link button';
+      linkedText(section, label, $('#embed-link-url').value, 'embed-preview-link-button');
+    } else if (v2 && thumbnail) {
+      image(section, thumbnail, 'embed-preview-thumbnail', 'Embed thumbnail');
+    }
+  }
+  const fields = draft.fields.filter(field => field.name.trim() || field.value.trim());
+  if (fields.length) {
+    const grid = element(content, 'div', 'embed-preview-fields');
+    for (const field of fields) {
+      const cell = element(grid, 'div', !v2 && field.inline ? 'embed-preview-inline' : 'embed-preview-full');
+      element(cell, 'div', 'embed-preview-field-name', field.name.trim());
+      renderEmbedMarkdown(element(cell, 'div', 'embed-preview-text'), field.value.trim());
+    }
+  }
+  const showTopThumbnail = thumbnail && (!v2 || !draft.description.trim());
+  if (content.childNodes.length || showTopThumbnail) {
+    const top = element(embedPreview, 'div', 'embed-preview-top');
+    element(top, 'div', 'embed-preview-content').append(content);
+    if (showTopThumbnail) image(top, thumbnail, 'embed-preview-thumbnail', 'Embed thumbnail');
+  }
+  image(embedPreview, draft.image, 'embed-preview-image', 'Embed image');
+  const timestamp = new Date(draft.timestamp);
+  const date = Number.isFinite(timestamp.valueOf()) ? timestamp.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
+  const footer = draft.footerText.trim();
+  if (footer || date) {
+    const lastContent = embedPreview.querySelector('.embed-preview-content')?.lastElementChild;
+    const hasImage = !!embedPreviewUrl(draft.image);
+    const alreadySeparated = lastContent?.classList.contains('embed-preview-divider') && !hasImage;
+    if (v2 && embedDivider.checked && embedPreview.childElementCount && !alreadySeparated) {
+      element(embedPreview, 'hr', 'embed-preview-divider');
+    }
+    const meta = element(embedPreview, 'div', 'embed-preview-meta embed-preview-footer');
+    if (footer && !v2) image(meta, draft.footerIcon, 'embed-preview-icon');
+    element(meta, 'span', '', [footer, date].filter(Boolean).join(' • '));
+  }
+  const empty = !embedPreview.childElementCount;
+  embedPreview.classList.toggle('hidden', empty);
+  $('#embed-preview-empty').classList.toggle('hidden', !empty);
+}
+
+let embedPreviewTimer;
+$('#embed-color').addEventListener('input', event => {
+  const field = event.currentTarget;
+  if (!/^[0-9a-f]{1,6}$/i.test(field.value)) return;
+  const { selectionStart, selectionEnd } = field;
+  field.value = '#' + field.value;
+  field.setSelectionRange(selectionStart + 1, selectionEnd + 1);
+});
+$('#embed-accent').addEventListener('change', renderEmbedPreview);
+embedV2.addEventListener('change', renderEmbedPreview);
+$('#embed-link-button').addEventListener('change', renderEmbedPreview);
+embedForm.addEventListener('input', () => {
+  clearTimeout(embedPreviewTimer);
+  embedPreviewTimer = setTimeout(renderEmbedPreview, 120);
+});
+savedEmbedName.addEventListener('input', () => {
+  if (!isMissingEmbedField(savedEmbedName)) {
+    savedEmbedName.removeAttribute('data-embed-missing');
+    savedEmbedName.removeAttribute('aria-invalid');
+  }
+});
+
+async function loadEmbedChannels() {
+  const guildId = state.guildId;
+  if (!guildId || !$('#loading').classList.contains('hidden')) return;
+  const load = ++embedChannelLoad;
+  if (embedDraftGuild !== guildId) {
+    clearEmbedEdit();
+    savedEmbedSelect.replaceChildren(new Option('New embed', ''));
+    embedForm.reset();
+    embedFields.replaceChildren();
+    updateEmbedFieldLimit();
+    renderEmbedPreview();
+    embedDraftGuild = guildId;
+  }
+  const selected = embedChannels.value;
+  embedChannelError = '';
+  embedChannels.disabled = true;
+  embedChannels.replaceChildren(new Option('Loading channels...', ''));
+  try {
+    const { channels, saved } = await request(embedUrl(guildId));
+    if (load !== embedChannelLoad || guildId !== state.guildId) return;
+    const selectedMessage = savedEmbedSelect.value;
+    savedEmbedSelect.replaceChildren(new Option('New embed', ''));
+    for (const entry of saved) rememberSavedEmbed(entry);
+    if ([...savedEmbedSelect.options].some(option => option.value === selectedMessage)) savedEmbedSelect.value = selectedMessage;
+    embedChannels.replaceChildren(new Option(channels.length ? 'Select a channel' : 'No channels available', ''));
+    for (const channel of channels) embedChannels.add(new Option('# ' + channel.name, channel.id));
+    if (channels.some(channel => channel.id === selected)) embedChannels.value = selected;
+    embedChannels.disabled = !channels.length;
+    if (!channels.length) {
+      embedChannelError = 'You and the bot need permission to send embeds in a channel.';
+      showSaveToast(embedChannelError, true);
+    }
+  } catch (error) {
+    if (load !== embedChannelLoad || guildId !== state.guildId) return;
+    embedChannels.replaceChildren(new Option('Could not load channels', ''));
+    embedChannelError = error.message;
+    showSaveToast(embedChannelError, true);
+  }
+}
+
+function addEmbedField(field, focus = false) {
+  if (embedFields.children.length >= 25) return;
+  const row = $('#embed-field-template').content.firstElementChild.cloneNode(true);
+  if (field) {
+    row.querySelector('[data-field="name"]').value = field.name;
+    row.querySelector('[data-field="value"]').value = field.value;
+    row.querySelector('[data-field="inline"]').checked = field.inline === true;
+  }
+  row.querySelector('[data-remove-field]').onclick = () => {
+    row.remove();
+    updateEmbedFieldLimit();
+    renderEmbedPreview();
+    $('#add-embed-field').focus();
+  };
+  embedFields.append(row);
+  updateEmbedFieldLimit();
+  if (focus) {
+    renderEmbedPreview();
+    row.querySelector('input').focus();
+  }
+}
+$('#add-embed-field').addEventListener('click', () => addEmbedField(undefined, true));
+
+const embedEditFields = $('#embed-v2-edit-fields');
+const embedNewControls = [...embedForm.children].slice(
+  [...embedForm.children].indexOf(embedEditFields) + 1, -1
+);
+
+function clearEmbedEdit() {
+  editingEmbed = undefined;
+  embedEditFields.replaceChildren();
+  embedEditFields.classList.add('hidden');
+  for (const control of embedNewControls) control.classList.remove('hidden');
+  embedV2.disabled = false;
+  savedEmbedName.required = true;
+  savedEmbedName.readOnly = false;
+  $('#send-embed').textContent = 'Send embed';
+}
+
+function rememberSavedEmbed(entry) {
+  const value = `${entry.channelId}/${entry.messageId}`;
+  const existing = [...savedEmbedSelect.options].find(option => option.value === value);
+  if (existing) existing.textContent = entry.name;
+  else savedEmbedSelect.add(new Option(entry.name, value));
+}
+
+function startNewEmbed() {
+  clearEmbedEdit();
+  embedForm.reset();
+  embedFields.replaceChildren();
+  updateEmbedFieldLimit();
+  renderEmbedPreview();
+}
+
+async function loadSavedEmbed() {
+  if (embedSending || loadingEmbed || state.guildId !== embedDraftGuild) return;
+  const guildId = state.guildId;
+  const selectedMessage = savedEmbedSelect.value;
+  if (!selectedMessage) {
+    showSaveToast('Choose a saved embed.', true);
+    return;
+  }
+  const path = `${embedUrl(guildId)}/${selectedMessage}`;
+  const name = savedEmbedSelect.selectedOptions[0].textContent;
+  loadingEmbed = true;
+  savedEmbedSelect.disabled = true;
+  try {
+    const result = await request(path);
+    if (guildId !== state.guildId || guildId !== embedDraftGuild) return;
+    const blocks = [];
+    function collect(components) {
+      for (const component of components) {
+        if (component.type === 10) blocks.push(component.content);
+        if (component.components) collect(component.components);
+      }
+    }
+    if (result.components) {
+      collect(result.components);
+      if (!blocks.length) throw new Error('This Components V2 message has no text to edit.');
+    }
+    clearEmbedEdit();
+    editingEmbed = { path, selection: selectedMessage, version: result.version, v2: !!result.components };
+    savedEmbedName.value = name;
+    savedEmbedName.required = false;
+    savedEmbedName.readOnly = true;
+    $('#send-embed').textContent = 'Save edits';
+    embedV2.checked = false;
+    embedV2.disabled = true;
+    embedChannels.labels[0].classList.add('hidden');
+    if (result.components) {
+      for (const control of embedNewControls) control.classList.add('hidden');
+      embedEditFields.classList.remove('hidden');
+      for (const [index, content] of blocks.entries()) {
+        const label = document.createElement('label');
+        label.textContent = 'Text block ' + (index + 1);
+        const field = document.createElement('textarea');
+        field.rows = 3;
+        field.maxLength = 4096;
+        field.value = content;
+        label.append(field);
+        embedEditFields.append(label);
+      }
+      renderEmbedPreview();
+    } else {
+      const embed = result.embed;
+      const values = {
+        title: embed.title, description: embed.description, url: embed.url,
+        authorName: embed.author?.name, authorUrl: embed.author?.url, authorIcon: embed.author?.icon_url,
+        footerText: embed.footer?.text, footerIcon: embed.footer?.icon_url,
+        image: embed.image?.url, thumbnail: embed.thumbnail?.url,
+        color: embed.color == null ? '' : '#' + embed.color.toString(16).padStart(6, '0')
+      };
+      for (const [name, value] of Object.entries(values)) embedForm.elements.namedItem(name).value = value ?? '';
+      const date = embed.timestamp ? new Date(embed.timestamp) : null;
+      embedForm.elements.namedItem('timestamp').value = date
+        ? new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 23)
+        : '';
+      $('#embed-accent').checked = embed.color != null;
+      embedFields.replaceChildren();
+      for (const field of embed.fields ?? []) addEmbedField(field);
+      updateEmbedFieldLimit();
+      renderEmbedPreview();
+    }
+  } catch (error) {
+    if (guildId === state.guildId && guildId === embedDraftGuild) {
+      savedEmbedSelect.value = editingEmbed?.selection ?? '';
+      showSaveToast(error.message, true);
+    }
+  } finally {
+    loadingEmbed = false;
+    savedEmbedSelect.disabled = false;
+  }
+}
+savedEmbedSelect.addEventListener('change', () => {
+  if (embedSending || loadingEmbed) {
+    savedEmbedSelect.value = editingEmbed?.selection ?? '';
+    return;
+  }
+  if (savedEmbedSelect.value) void loadSavedEmbed();
+  else if (editingEmbed) startNewEmbed();
+});
+
+function isMissingEmbedField(field) {
+  return field.willValidate && field.required && !field.value.trim();
+}
+
+embedForm.addEventListener('reset', () => {
+  for (const field of $('#tools').querySelectorAll('[data-embed-missing]')) {
+    field.removeAttribute('data-embed-missing');
+    field.removeAttribute('aria-invalid');
+  }
+});
+
+embedForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  const guildId = state.guildId;
+  if (embedSending || loadingEmbed || embedDraftGuild !== guildId || !$('#loading').classList.contains('hidden')) return;
+  renderEmbedPreview();
+  if (!editingEmbed && embedChannels.disabled) {
+    showSaveToast(embedChannelError || 'Wait for the destination channels to load.', true);
+    return;
+  }
+  const invalidFields = [...embedForm.elements].filter(field =>
+    !editingEmbed?.v2 && !(editingEmbed && field === embedChannels) &&
+    (isMissingEmbedField(field) || (field.willValidate && !field.validity.valid))
+  );
+  if (invalidFields.length) {
+    const invalidValues = [];
+    for (const field of invalidFields) {
+      if (isMissingEmbedField(field)) {
+        field.setAttribute('data-embed-missing', '');
+        field.setAttribute('aria-invalid', 'true');
+        continue;
+      }
+      const label = field.labels?.[0]?.textContent.trim() || 'Field';
+      invalidValues.push(`Enter a valid ${label.toLowerCase()}.`);
+    }
+    if (invalidValues.length) showSaveToast(invalidValues.join(' '), true);
+    invalidFields[0].focus();
+    return;
+  }
+  const embed = editingEmbed?.v2 ? {} : readEmbedDraft();
+  if (embed.timestamp) {
+    const date = new Date(embed.timestamp);
+    if (!Number.isFinite(date.valueOf()) || date.getFullYear() > 9999) {
+      showSaveToast('Enter a valid timestamp.', true);
+      return;
+    }
+    embed.timestamp = date.toISOString();
+  }
+  embedSending = true;
+  const payload = {
+    channelId: embedChannels.value, embed, name: savedEmbedName.value.trim(),
+    componentsV2: embedV2.checked, divider: embedV2.checked && embedDivider.checked
+  };
+  if (embedV2.checked && $('#embed-link-button').checked) {
+    payload.sectionButton = { label: $('#embed-link-label').value, url: $('#embed-link-url').value };
+  }
+  const draft = JSON.stringify({ guildId, ...payload });
+  const edit = editingEmbed;
+  try {
+    let result;
+    if (edit) {
+      result = await request(edit.path, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          embed, version: edit.version,
+          textBlocks: edit.v2 ? [...embedEditFields.querySelectorAll('textarea')].map(field => field.value) : undefined
+        })
+      });
+      edit.version = result.version;
+    } else {
+      if (pendingEmbedSend?.draft !== draft) {
+        const bytes = crypto.getRandomValues(new Uint8Array(12));
+        const nonce = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+        pendingEmbedSend = { draft, nonce };
+      }
+      result = await request(embedUrl(guildId), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, nonce: pendingEmbedSend.nonce })
+      });
+      pendingEmbedSend = undefined;
+    }
+    if (guildId !== state.guildId || guildId !== embedDraftGuild) return;
+    if (result.saved) rememberSavedEmbed(result.saved);
+    showSaveToast(edit ? 'Edits saved' : 'Embed sent');
+  } catch (error) {
+    if (guildId === state.guildId && guildId === embedDraftGuild) {
+      showSaveToast(error instanceof TypeError
+        ? 'Lost connection to the dashboard. Check the channel, then retry if needed.'
+        : error.message, true);
+    }
+  } finally {
+    embedSending = false;
+  }
+});
 document.querySelectorAll('#level-tabs .level-tab').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 function showModerationPage(page){
   document.querySelectorAll('.moderation-child').forEach(button=>button.classList.toggle('active',button.dataset.moderationPage===page));
@@ -752,9 +1314,9 @@ $('#view-affected-shop-items').onclick=()=>{closeEconomyIssues();showEconomyPage
 let autoModRequestId=0;
 let autoModRules=[];
 const autoModForm=$('#automod-form');
-const autoModSelector=$('#automod-rule');
+const autoModModal=$('#automod-modal');
 const autoModStatus=$('#automod-status');
-const newAutoModRule='new';
+let editingAutoModRule=null;
 const autoModFields=$('#automod-fields');
 const autoModUrl=guildId=>`/api/guilds/${guildId}/automod`;
 
@@ -767,13 +1329,36 @@ function updateAutoModFields(){
   });
 }
 
-function selectAutoModRule(){
-  const create=autoModSelector.value===newAutoModRule;
-  const rule=autoModRules.find(entry=>entry.id===autoModSelector.value);
-  const readOnly=rule&&!rule.managed;
-  autoModForm.classList.toggle('hidden',!create&&!rule?.managed);
-  autoModStatus.textContent=readOnly?'Manage this rule in Discord server settings.':'';
-  if(!create&&!rule?.managed)return;
+function renderAutoModRules(){
+  const search=$('#automod-search').value.trim().toLowerCase();
+  const cards=autoModRules.filter(rule=>rule.name.toLowerCase().includes(search)).map(rule=>{
+    const card=document.createElement('button');
+    card.type='button';
+    card.className='shop-item-tile automod-rule-tile';
+    card.title=rule.managed?rule.name:'Manage this rule in Discord server settings';
+    const title=document.createElement('h3');
+    title.textContent=rule.name;
+    card.append(title);
+    card.onclick=()=>openAutoModRule(rule);
+    return card;
+  });
+  $('#automod-rules').replaceChildren(...cards);
+  return cards.length;
+}
+
+function closeAutoModRule(){
+  closeSelectPopup();
+  autoModModal.classList.add('hidden');
+  editingAutoModRule=null;
+}
+
+function openAutoModRule(rule=null){
+  if(rule&&!rule.managed){
+    showSaveToast('Manage this rule in Discord server settings.');
+    return;
+  }
+  editingAutoModRule=rule;
+  $('#automod-modal-title').textContent=rule?'Edit rule':'Create rule';
   $('#automod-save').textContent=rule?'Save changes':'Create rule';
   $('#automod-name').value=rule?.name||'';
   $('#automod-type').value=rule?.type||'1';
@@ -793,18 +1378,17 @@ function selectAutoModRule(){
   $('#automod-enabled').checked=!!rule?.enabled;
   $('#automod-delete').classList.toggle('hidden',!rule);
   updateAutoModFields();
-  if(create)$('#automod-name').focus();
+  autoModModal.classList.remove('hidden');
+  $('#automod-name').focus();
 }
 
-async function loadAutoMod(selectedId=''){
+async function loadAutoMod(){
   const guildId=state.guildId, requestId=++autoModRequestId;
   const current=()=>guildId===state.guildId&&requestId===autoModRequestId;
   autoModRules=[];
-  autoModSelector.options.length=2;
-  autoModSelector.value='';
-  autoModSelector.disabled=false;
+  closeAutoModRule();
+  renderAutoModRules();
   autoModFields.disabled=false;
-  autoModForm.classList.add('hidden');
   autoModStatus.textContent='Loading rules…';
   const options=entries=>entries.map(entry=>new Option(entry.name,entry.id));
   $('#automod-roles').replaceChildren(new Option('Select roles',''),...options(state.data.roles));
@@ -815,15 +1399,8 @@ async function loadAutoMod(selectedId=''){
     if(!current())return;
     if(!Array.isArray(rules))throw new Error('The server returned an unexpected AutoMod response. Try again.');
     autoModRules=rules;
-    autoModSelector.append(...options(rules.map(rule=>({
-      ...rule,name:`${rule.name} (${rule.enabled?'enabled':'disabled'}${rule.managed?'':', managed in Discord'})`
-    }))));
-    if(autoModSelector.value===''&&rules.some(rule=>rule.id===selectedId)){
-      autoModSelector.value=selectedId;
-      selectAutoModRule();
-    }else if(autoModStatus.textContent==='Loading rules…'){
-      autoModStatus.textContent='';
-    }
+    const count=renderAutoModRules();
+    autoModStatus.textContent=count?'':rules.length?'No matching rules.':'No AutoMod rules yet.';
   }catch(error){
     if(current()){
       autoModStatus.textContent=error.message;
@@ -833,36 +1410,39 @@ async function loadAutoMod(selectedId=''){
 
 async function saveAutoMod(method,body){
   const guildId=state.guildId, requestId=autoModRequestId;
-  const id=method==='POST'?'':autoModSelector.value;
+  const id=editingAutoModRule?.id;
   const path=autoModUrl(guildId)+(id?`/${id}`:'');
   const current=()=>guildId===state.guildId&&requestId===autoModRequestId;
   closeSelectPopup();
   autoModFields.disabled=true;
-  autoModSelector.disabled=true;
   try{
-    const saved=await request(path,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    await request(path,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(current()){
       showSaveToast(method==='DELETE'?'AutoMod rule deleted':'AutoMod rule saved');
-      await loadAutoMod(saved?.id);
+      await loadAutoMod();
     }
   }catch(error){
     if(current()){
       autoModFields.disabled=false;
-      autoModSelector.disabled=false;
-      autoModStatus.textContent=error.message;
       showSaveToast(error.message,true);
     }
   }
 }
 
-autoModSelector.onchange=selectAutoModRule;
+$('#add-automod-rule').onclick=()=>openAutoModRule();
+$('#automod-search').oninput=()=>{
+  const count=renderAutoModRules();
+  if(autoModRules.length)autoModStatus.textContent=count?'':'No matching rules.';
+};
+$('#close-automod-modal').onclick=()=>{if(!autoModFields.disabled)closeAutoModRule()};
+$('#automod-modal .modal-backdrop').onclick=$('#close-automod-modal').onclick;
 $('#automod-type').onchange=updateAutoModFields;
 autoModForm.onsubmit=event=>{
   event.preventDefault();
   const type=Number($('#automod-type').value);
   const lines=selector=>$(selector).value.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
   const selected=selector=>$(selector).value.split(',').filter(Boolean);
-  void saveAutoMod(autoModSelector.value===newAutoModRule?'POST':'PUT',{
+  void saveAutoMod(editingAutoModRule?'PUT':'POST',{
     type,name:$('#automod-name').value,enabled:$('#automod-enabled').checked,
     keywords:lines('#automod-keywords'),patterns:lines('#automod-patterns'),allowList:lines('#automod-allow'),
     presets:selected('#automod-presets').map(Number),mentionLimit:Number($('#automod-mention-limit').value),

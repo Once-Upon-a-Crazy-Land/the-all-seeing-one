@@ -15,6 +15,7 @@ import { enforceShopItemLimit, premiumStatus, createPremiumSubscription, activat
 
 import { moderationSettings, moderationCases, validateWarningRules } from "./moderation.js";
 import { autoModError, deleteAutoModRule, listAutoModRules, writeAutoModRule } from "./automod.js";
+import { composeEmbed, composeV2Container, EmbedInputError, updateV2Text } from "./embed-composer.js";
 
 const app = express();
 if (config.redirectUri.startsWith("https://")) app.set("trust proxy", 1);
@@ -72,7 +73,7 @@ function authorizeDiscord(req: Request, res: Response, install: boolean) {
   if (install) {
     query.set("scope", "bot applications.commands identify guilds");
     const permissions = PermissionFlagsBits.ManageRoles | PermissionFlagsBits.ViewChannel |
-      PermissionFlagsBits.SendMessages | PermissionFlagsBits.ReadMessageHistory |
+      PermissionFlagsBits.SendMessages | PermissionFlagsBits.EmbedLinks | PermissionFlagsBits.ReadMessageHistory |
       PermissionFlagsBits.ManageGuild | PermissionFlagsBits.ModerateMembers |
       PermissionFlagsBits.ViewAuditLog | PermissionFlagsBits.ChangeNickname;
     query.set("permissions", permissions.toString());
@@ -142,6 +143,139 @@ function canManage(req: Request, res: Response, next: NextFunction) {
 }
 
 const paymentOrigin = new URL(config.redirectUri).origin;
+
+function canSendComposedEmbed(
+  channel: import("discord.js").GuildBasedChannel | null,
+  member: import("discord.js").GuildMember,
+  botMember: import("discord.js").GuildMember
+): channel is import("discord.js").TextChannel | import("discord.js").NewsChannel {
+  if (channel?.type !== ChannelType.GuildText && channel?.type !== ChannelType.GuildAnnouncement) return false;
+  const send = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks];
+  return !!channel.permissionsFor(member)?.has(send) && !!channel.permissionsFor(botMember)?.has(send);
+}
+
+const embedPath = "/api/guilds/:guildId/tools/embeds";
+const editEmbedPath = embedPath + "/:channelId/:messageId";
+db.exec(`CREATE TABLE IF NOT EXISTS saved_tool_embeds (
+  guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, message_id TEXT NOT NULL, name TEXT NOT NULL,
+  PRIMARY KEY (guild_id, message_id)
+)`);
+const saveToolEmbed = db.prepare(`INSERT INTO saved_tool_embeds (guild_id, channel_id, message_id, name)
+  VALUES (?, ?, ?, ?) ON CONFLICT(guild_id, message_id) DO UPDATE SET name = excluded.name`);
+const listToolEmbeds = db.prepare(`SELECT channel_id AS channelId, message_id AS messageId, name
+  FROM saved_tool_embeds WHERE guild_id = ? ORDER BY name COLLATE NOCASE, message_id`);
+
+function toolEmbedName(value: unknown) {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!name || name.length > 100) throw new EmbedInputError("Enter an embed name of up to 100 characters.");
+  return name;
+}
+
+app.route(editEmbedPath).all(requireUser, canManage).all(async (req, res) => {
+  const editing = req.method === "PATCH";
+  if (req.method !== "GET" && !editing) return res.sendStatus(405);
+  if (editing && (req.headers.origin !== paymentOrigin || !req.is("application/json")))
+    return res.status(403).json({ error: "Invalid request" });
+  const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+  const channelId = String(req.params.channelId);
+  const messageId = String(req.params.messageId);
+  if (![channelId, messageId].every(id => /^\d{17,20}$/.test(id)))
+    return res.status(400).json({ error: "Enter a Discord message link." });
+  try {
+    const [member, botMember, channel] = await Promise.all([
+      guild.members.fetch({ user: req.session!.user!.id, force: true }).catch(() => null),
+      guild.members.fetchMe(),
+      guild.channels.fetch(channelId, { force: true }).catch(() => null)
+    ]);
+    if (!member?.permissions.has(PermissionFlagsBits.ManageGuild) || channel?.guildId !== guild.id ||
+        !canSendComposedEmbed(channel, member, botMember) ||
+        !channel.permissionsFor(member)?.has(PermissionFlagsBits.ReadMessageHistory) ||
+        !channel.permissionsFor(botMember)?.has(PermissionFlagsBits.ReadMessageHistory))
+      return res.status(403).json({ error: "You and the bot need access to read and send messages in that channel." });
+    const message = await channel.messages.fetch({ message: messageId, force: true }).catch(() => null);
+    if (!message) return res.status(404).json({ error: "Discord message not found." });
+    if (message.author.id !== bot.user?.id || !message.editable)
+      return res.status(403).json({ error: "Only messages sent by this bot can be edited here." });
+    const version = message.editedTimestamp;
+    const v2 = message.flags.has(MessageFlags.IsComponentsV2);
+    if (!v2 && (message.embeds.length !== 1 || message.embeds[0].data.type !== "rich"))
+      return res.status(400).json({ error: "Choose a message with one regular embed." });
+    if (editing && req.body?.version !== version)
+      return res.status(409).json({ error: "This message has changed. Load it again before saving." });
+    if (v2) {
+      // Discord returns the rendered layout, so retain it rather than guessing the original fields.
+      const components = message.components.map(component => component.toJSON());
+      if (!editing) return res.json({ components, url: message.url, version });
+      const updated = updateV2Text(components, req.body?.textBlocks);
+      const saved = await message.edit({ components: updated, allowedMentions: { parse: [], users: [], roles: [] } });
+      return res.json({ url: saved.url, version: saved.editedTimestamp });
+    } else {
+      if (!editing) return res.json({ embed: message.embeds[0].toJSON(), url: message.url, version });
+      const saved = await message.edit({ embeds: [composeEmbed(req.body?.embed)], allowedMentions: { parse: [], users: [], roles: [] } });
+      return res.json({ url: saved.url, version: saved.editedTimestamp });
+    }
+  } catch (error) {
+    if (error instanceof EmbedInputError) return res.status(400).json({ error: error.message });
+    res.status(502).json({ error: "Discord could not load or save the message." });
+  }
+});
+app.get(embedPath, requireUser, canManage, async (req, res) => {
+  const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+  try {
+    const [member, botMember, channels] = await Promise.all([
+      guild.members.fetch({ user: req.session!.user!.id, force: true }).catch(() => null),
+      guild.members.fetchMe(),
+      guild.channels.fetch()
+    ]);
+    if (!member?.permissions.has(PermissionFlagsBits.ManageGuild)) return res.status(403).json({ error: "Manage Server permission required" });
+    const available = channels.filter(channel => canSendComposedEmbed(channel, member, botMember));
+    const saved = listToolEmbeds.all(guild.id) as { channelId: string; messageId: string; name: string }[];
+    res.json({ channels: available
+      .sort((a, b) => a!.name.localeCompare(b!.name))
+      .map(channel => ({ id: channel!.id, name: channel!.name })),
+      saved: saved.filter(entry => {
+        const channel = available.get(entry.channelId);
+        return channel?.permissionsFor(member)?.has(PermissionFlagsBits.ReadMessageHistory) &&
+          channel.permissionsFor(botMember)?.has(PermissionFlagsBits.ReadMessageHistory);
+      })
+    });
+  } catch {
+    res.status(502).json({ error: "Could not load Discord channels." });
+  }
+});
+
+app.post(embedPath, requireUser, canManage, async (req, res) => {
+  if (req.headers.origin !== paymentOrigin || !req.is("application/json")) return res.status(403).json({ error: "Invalid request" });
+  const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+  const channelId = req.body?.channelId;
+  const nonce = req.body?.nonce;
+  if (typeof channelId !== "string" || !/^\d{17,20}$/.test(channelId))
+    return res.status(400).json({ error: "Choose a channel." });
+  if (typeof nonce !== "string" || !/^[a-f0-9]{24}$/.test(nonce))
+    return res.status(400).json({ error: "Refresh the dashboard and try again." });
+  try {
+    const name = toolEmbedName(req.body?.name);
+    const embed = composeEmbed(req.body?.embed);
+    const [member, botMember, channel] = await Promise.all([
+      guild.members.fetch({ user: req.session!.user!.id, force: true }).catch(() => null),
+      guild.members.fetchMe(),
+      guild.channels.fetch(channelId, { force: true }).catch(() => null)
+    ]);
+    if (!member?.permissions.has(PermissionFlagsBits.ManageGuild)) return res.status(403).json({ error: "Manage Server permission required" });
+    if (channel?.guildId !== guild.id || !canSendComposedEmbed(channel, member, botMember))
+      return res.status(403).json({ error: "Choose a channel where you and the bot can send embeds." });
+    const format = req.body.componentsV2 === true
+      ? { flags: MessageFlags.IsComponentsV2 as const, components: [composeV2Container(embed, req.body.divider === true, req.body.sectionButton)] }
+      : { embeds: [embed] };
+    const message = await channel.send({ ...format, allowedMentions: { parse: [] }, nonce, enforceNonce: true });
+    saveToolEmbed.run(guild.id, channel.id, message.id, name);
+    res.status(201).json({ url: message.url, saved: { channelId: channel.id, messageId: message.id, name } });
+  } catch (error) {
+    if (error instanceof EmbedInputError) return res.status(400).json({ error: error.message });
+    res.status(502).json({ error: "Discord could not send the embed. Check the channel before trying again." });
+  }
+});
+
 function paymentRequest(req: Request, res: Response, next: NextFunction) {
   if (req.headers.origin !== paymentOrigin || !req.is("application/json")) return res.status(403).json({ error: "Invalid payment request" });
   next();
