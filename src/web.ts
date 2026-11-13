@@ -73,7 +73,8 @@ function authorizeDiscord(req: Request, res: Response, install: boolean) {
     query.set("scope", "bot applications.commands identify guilds");
     const permissions = PermissionFlagsBits.ManageRoles | PermissionFlagsBits.ViewChannel |
       PermissionFlagsBits.SendMessages | PermissionFlagsBits.ReadMessageHistory |
-      PermissionFlagsBits.ManageGuild | PermissionFlagsBits.ModerateMembers | PermissionFlagsBits.ViewAuditLog;
+      PermissionFlagsBits.ManageGuild | PermissionFlagsBits.ModerateMembers |
+      PermissionFlagsBits.ViewAuditLog | PermissionFlagsBits.ChangeNickname;
     query.set("permissions", permissions.toString());
     query.set("integration_type", "0");
   }

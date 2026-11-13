@@ -230,8 +230,13 @@ bot.once(Events.ClientReady, async client => {
   await client.application.commands.set([levelCommand.toJSON(), ...economyCommands.map(command => command.toJSON()), ...moderationCommands.map(command => command.toJSON())]);
 });
 
-bot.on(Events.GuildCreate, guild => {
+bot.on(Events.GuildCreate, async guild => {
   console.log(`Discord bot joined ${JSON.stringify(guild.name)} (${guild.id}). Server count: ${bot.guilds.cache.size}`);
+  try {
+    await guild.members.editMe({ nick: "Rabarbarard" });
+  } catch (error) {
+    console.error(`Failed to set the bot nickname in server ${guild.id}`, error);
+  }
 });
 
 bot.on(Events.GuildDelete, guild => {
