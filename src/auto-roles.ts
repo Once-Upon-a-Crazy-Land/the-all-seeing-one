@@ -1,5 +1,10 @@
 import { PermissionFlagsBits, type Client, type GuildMember, type Role } from "discord.js";
 import { db } from "./db.js";
+import { premiumStatus } from "./premium.js";
+
+export function maxAutoRoleHours(guildId: string) {
+  return (premiumStatus(guildId).active ? 30 : 7) * 24;
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS auto_roles (
@@ -14,7 +19,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS auto_role_expirations_due ON auto_role_expirations(expires_at);
 `);
 
-const list = db.prepare("SELECT role_id AS roleId, hours FROM auto_roles WHERE guild_id = ?");
+const list = db.prepare("SELECT role_id AS roleId, MIN(hours, ?) AS hours FROM auto_roles WHERE guild_id = ?");
 const save = db.prepare(`INSERT INTO auto_roles VALUES (?, ?, ?)
   ON CONFLICT(guild_id, role_id) DO UPDATE SET hours = excluded.hours`);
 const remove = db.prepare("DELETE FROM auto_roles WHERE guild_id = ? AND role_id = ?");
@@ -26,7 +31,7 @@ const forget = db.prepare(`DELETE FROM auto_role_expirations
   WHERE guild_id = ? AND role_id = ? AND user_id = ? AND joined_at = ? AND expires_at = ?`);
 
 export function listAutoRoles(guildId: string) {
-  const rules = list.all(guildId) as { roleId: string; hours: number | null }[];
+  const rules = list.all(maxAutoRoleHours(guildId), guildId) as { roleId: string; hours: number | null }[];
   return rules.filter(rule => rule.roleId !== guildId);
 }
 

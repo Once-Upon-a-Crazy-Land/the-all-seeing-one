@@ -190,7 +190,7 @@ async function loadAutoRoles() {
 }
 
 function renderAutoRoles() {
-  const { roles, rules } = autoRolesData;
+  const { roles, rules, maxHours } = autoRolesData;
   const available = roles.filter(role => !rules.some(rule => rule.roleId === role.id));
   autoRoleAdd.replaceChildren(new Option(available.length ? 'Select a role' : 'No available roles', ''));
   for (const role of available) autoRoleAdd.add(new Option(role.name, role.id));
@@ -200,10 +200,12 @@ function renderAutoRoles() {
     const role = roles.find(role => role.id === roleId);
     const row = document.createElement('fieldset');
     row.className = 'embed-field';
-    row.innerHTML = '<legend></legend><div class="form-grid"><label>Duration<select><option value="permanent">Permanent</option><option value="temporary">Temporary</option></select></label><label>Hours<input type="number" min="1" max="8760" step="1" required></label></div><div class="embed-actions"><button type="button" class="outline">Remove</button></div>';
+    row.innerHTML = '<legend></legend><div class="form-grid"><label>Duration<select><option value="permanent">Permanent</option><option value="temporary">Temporary</option></select></label><label>Hours<input type="number" min="1" step="1" required></label></div><div class="embed-actions"><button type="button" class="outline">Remove</button></div>';
     row.querySelector('legend').textContent = role?.name ?? 'Unavailable role';
     const mode = row.querySelector('select');
     const length = row.querySelector('input');
+    length.max = String(maxHours);
+    length.closest('label').firstChild.textContent = `Hours (max ${maxHours})`;
     mode.value = hours === null ? 'permanent' : 'temporary';
     length.value = hours ?? 24;
     length.closest('label').classList.toggle('hidden', hours === null);

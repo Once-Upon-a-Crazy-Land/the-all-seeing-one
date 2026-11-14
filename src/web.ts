@@ -18,7 +18,7 @@ import { autoModError, deleteAutoModRule, listAutoModRules, writeAutoModRule } f
 import { composeEmbed, composeV2Container, EmbedInputError, updateV2Text } from "./embed-composer.js";
 import { canSendWelcome, renderGuildMemberCard, setMemberCardChannel, memberCardChannelId } from "./welcome.js";
 import { renderMemberCard } from "./level-card.js";
-import { canSetAutoRole, listAutoRoles, saveAutoRole } from "./auto-roles.js";
+import { canSetAutoRole, listAutoRoles, maxAutoRoleHours, saveAutoRole } from "./auto-roles.js";
 
 const app = express();
 if (config.redirectUri.startsWith("https://")) app.set("trust proxy", 1);
@@ -170,7 +170,7 @@ app.get(autoRolesPath, requireUser, canManage, async (req, res) => {
   await guild.members.fetchMe();
   const roles = guild.roles.cache.filter(role => role.id !== guild.id && canSetAutoRole(role, actor))
     .map(({ id, name }) => ({ id, name }));
-  res.json({ roles, rules: listAutoRoles(guild.id) });
+  res.json({ roles, rules: listAutoRoles(guild.id), maxHours: maxAutoRoleHours(guild.id) });
 });
 
 app.put(autoRolesPath + "/:roleId", requireUser, canManage, async (req, res) => {
@@ -179,9 +179,10 @@ app.put(autoRolesPath + "/:roleId", requireUser, canManage, async (req, res) => 
   const guild = bot.guilds.cache.get(String(req.params.guildId))!;
   const roleId = String(req.params.roleId);
   const { enabled, hours } = req.body ?? {};
+  const maxHours = maxAutoRoleHours(guild.id);
   if (!/^\d{17,20}$/.test(roleId) || typeof enabled !== "boolean" ||
-      (enabled && hours !== null && (!Number.isInteger(hours) || hours < 1 || hours > 8760)))
-    return res.status(400).json({ error: "Choose Permanent or enter 1 to 8,760 hours." });
+      (enabled && hours !== null && (!Number.isInteger(hours) || hours < 1 || hours > maxHours)))
+    return res.status(400).json({ error: `Choose Permanent or enter 1 to ${maxHours} hours.` });
 
   const actor = await guild.members.fetch({ user: req.session!.user!.id, force: true }).catch(() => null);
   if (!actor?.permissions.has([PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles]))
