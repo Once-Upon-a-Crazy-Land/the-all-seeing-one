@@ -2700,6 +2700,11 @@ textarea { scrollbar-width: none; }
 .embed-preview-title { font-size: 16px; }
 .embed-preview a { color: #87c8ff; }
 .embed-preview-text { white-space: pre-wrap; }
+.embed-preview-text :is(h1, h2, h3) { margin: 0.5em 0 0.25em; font-weight: 700; line-height: 1.25; }
+.embed-preview-text h1 { font-size: 1.5em; }
+.embed-preview-text h2 { font-size: 1.25em; }
+.embed-preview-text h3 { font-size: 1em; }
+.embed-preview-text small { display: block; font-size: 0.86em; color: #b5bac1; }
 .embed-preview-text blockquote { margin: 4px 0; padding-left: 10px; border-left: 4px solid #777982; }
 .embed-preview-text ul { margin: 4px 0; padding-left: 22px; }
 .embed-preview-text pre { margin: 4px 0; white-space: pre-wrap; }

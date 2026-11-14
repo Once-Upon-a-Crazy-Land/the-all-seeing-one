@@ -165,11 +165,15 @@ let loadingEmbed = false;
 const embedUrl = guildId => `/api/guilds/${guildId}/tools/embeds`;
 const updateEmbedFieldLimit = () => { $('#add-embed-field').disabled = embedFields.children.length >= 25; };
 
+function embedFieldText(row, key) {
+  return row.querySelector(`[data-field="${key}"]`).value;
+}
+
 function readEmbedDraft() {
   const draft = Object.fromEntries(new FormData(embedForm));
   draft.fields = [...embedFields.children].map(row => ({
-    name: row.querySelector('[data-field="name"]').value,
-    value: row.querySelector('[data-field="value"]').value,
+    name: embedFieldText(row, 'name'),
+    value: embedFieldText(row, 'value'),
     inline: row.querySelector('[data-field="inline"]').checked
   }));
   return draft;
@@ -183,7 +187,7 @@ function embedPreviewUrl(value) {
   return '';
 }
 
-function renderEmbedMarkdown(target, value) {
+function renderEmbedMarkdown(target, value, allowHeadings = true) {
   const formats = {
     '***': ['strong', 'em'], '**': ['strong'], '*': ['em'],
     '__': ['u'], '_': ['em'], '~~': ['s'], '||': ['button']
@@ -241,8 +245,16 @@ function renderEmbedMarkdown(target, value) {
     }
     const lines = block.split('\n');
     const listItem = /^( *)[-*] (.+)$/;
+    const heading = /^(#{1,3}|-#) +(.+)$/;
     for (let line = 0; line < lines.length;) {
-      if (listItem.test(lines[line])) {
+      const headingMatch = allowHeadings && heading.exec(lines[line]);
+      if (headingMatch) {
+        const [, marker, content] = headingMatch;
+        const element = document.createElement(marker === '-#' ? 'small' : 'h' + marker.length);
+        inline(element, content);
+        target.append(element);
+        line++;
+      } else if (listItem.test(lines[line])) {
         const list = document.createElement('ul');
         const levels = [{ list, indent: lines[line].match(listItem)[1].length, item: null }];
         while (line < lines.length && listItem.test(lines[line])) {
@@ -275,7 +287,7 @@ function renderEmbedMarkdown(target, value) {
         target.append(quote);
       } else {
         const plain = [];
-        while (line < lines.length && !/^(?:>|>>>) /.test(lines[line]) && !listItem.test(lines[line])) plain.push(lines[line++]);
+        while (line < lines.length && !/^(?:>|>>>) /.test(lines[line]) && !listItem.test(lines[line]) && !(allowHeadings && heading.test(lines[line]))) plain.push(lines[line++]);
         inline(target, plain.join('\n'));
       }
     }
@@ -379,8 +391,8 @@ function renderEmbedPreview() {
     const grid = element(content, 'div', 'embed-preview-fields');
     for (const field of fields) {
       const cell = element(grid, 'div', !v2 && field.inline ? 'embed-preview-inline' : 'embed-preview-full');
-      element(cell, 'div', 'embed-preview-field-name', field.name.trim());
-      renderEmbedMarkdown(element(cell, 'div', 'embed-preview-text'), field.value.trim());
+      if (!v2 || field.name.trim()) element(cell, 'div', 'embed-preview-field-name', field.name.trim() || '\u200b');
+      if (!v2 || field.value.trim()) renderEmbedMarkdown(element(cell, 'div', 'embed-preview-text'), field.value.trim() || '\u200b', v2);
     }
   }
   const showTopThumbnail = thumbnail && (!v2 || !draft.description.trim());
@@ -475,8 +487,8 @@ function addEmbedField(field, focus = false) {
   if (embedFields.children.length >= 25) return;
   const row = $('#embed-field-template').content.firstElementChild.cloneNode(true);
   if (field) {
-    row.querySelector('[data-field="name"]').value = field.name;
-    row.querySelector('[data-field="value"]').value = field.value;
+    row.querySelector('[data-field="name"]').value = field.name === '\u200b' ? '' : field.name;
+    row.querySelector('[data-field="value"]').value = field.value === '\u200b' ? '' : field.value;
     row.querySelector('[data-field="inline"]').checked = field.inline === true;
   }
   row.querySelector('[data-remove-field]').onclick = () => {
@@ -628,6 +640,12 @@ embedForm.addEventListener('submit', async event => {
   event.preventDefault();
   const guildId = state.guildId;
   if (embedSending || loadingEmbed || embedDraftGuild !== guildId || !$('#loading').classList.contains('hidden')) return;
+  if (!editingEmbed?.v2) {
+    for (const row of [...embedFields.children]) {
+      if (!embedFieldText(row, 'name').trim() && !embedFieldText(row, 'value').trim()) row.remove();
+    }
+    updateEmbedFieldLimit();
+  }
   renderEmbedPreview();
   if (!editingEmbed && embedChannels.disabled) {
     showSaveToast(embedChannelError || 'Wait for the destination channels to load.', true);

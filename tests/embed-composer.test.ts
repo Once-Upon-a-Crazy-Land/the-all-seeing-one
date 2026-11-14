@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { composeEmbed, EmbedInputError } from "../src/embed-composer.js";
+import { composeEmbed, composeV2Container, EmbedInputError } from "../src/embed-composer.js";
 
 test("composes Discord embed metadata and keeps unsupported properties out", () => {
   const embed = composeEmbed({
@@ -22,11 +22,24 @@ test("composes Discord embed metadata and keeps unsupported properties out", () 
   });
 });
 
+test("keeps partial fields and removes empty fields", () => {
+  const embed = composeEmbed({
+    fields: [{ name: "Name only" }, { value: "Text only", inline: true }, { name: " ", value: "\n" }]
+  });
+  assert.deepEqual(embed.fields, [
+    { name: "Name only", value: "\u200b", inline: false },
+    { name: "\u200b", value: "Text only", inline: true }
+  ]);
+  assert.deepEqual(composeV2Container(embed, false).toJSON().components.map(component =>
+    "content" in component ? component.content : undefined
+  ), ["**Name only**", "Text only"]);
+  assert.throws(() => composeEmbed({ fields: [{}] }), /Add text/);
+});
+
 test("rejects invalid or oversized embeds before sending to Discord", () => {
   assert.throws(() => composeEmbed({ color: "#5865f2" }), EmbedInputError);
   assert.throws(() => composeEmbed({ title: "Events", url: "javascript:alert(1)" }), /HTTP or HTTPS/);
   assert.throws(() => composeEmbed({ footerIcon: "https://example.com/icon.png" }), /Enter footer text/);
-  assert.throws(() => composeEmbed({ fields: [{ name: "Partial" }] }), /needs a name and text/);
   assert.throws(() => composeEmbed({ fields: Array(26).fill({ name: "A", value: "B" }) }), /25 fields/);
   assert.throws(() => composeEmbed({ title: "Events", description: "x".repeat(4097) }), /Description/);
   assert.equal(composeEmbed({ title: "Events", description: "x".repeat(4096) }).description?.length, 4096);

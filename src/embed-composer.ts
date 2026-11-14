@@ -3,6 +3,9 @@ import { ButtonBuilder, ButtonStyle, ContainerBuilder, escapeMarkdown, MediaGall
 
 export class EmbedInputError extends Error {}
 
+// Regular Discord embeds require both field properties to contain text.
+const blankFieldText = "\u200b";
+
 export function updateV2Text<T>(components: T[], input: unknown): T[] {
   if (!Array.isArray(input)) throw new EmbedInputError("Enter the message text.");
   const blocks: unknown[] = input;
@@ -56,7 +59,12 @@ export function composeV2Container(embed: APIEmbed, divider: boolean, buttonInpu
     if (divider) container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
   }
   if (embed.description) addText(embed.description, true);
-  for (const field of embed.fields ?? []) addText(`${heading(field.name)}\n${field.value}`);
+  for (const field of embed.fields ?? []) {
+    const name = field.name === blankFieldText ? "" : heading(field.name);
+    const value = field.value === blankFieldText ? "" : field.value;
+    const content = [name, value].filter(Boolean).join("\n");
+    if (content) addText(content);
+  }
   const timestamp = embed.timestamp ? `<t:${Math.floor(Date.parse(embed.timestamp) / 1000)}:f>` : "";
   const footer = [embed.footer && escapeMarkdown(embed.footer.text), timestamp].filter(Boolean).join(" • ");
   const images = [embed.image?.url, !thumbnailPlaced && !footer && thumbnail].filter((url): url is string => !!url);
@@ -116,12 +124,12 @@ export function composeEmbed(input: unknown): APIEmbed {
 
   const rows = data.fields === undefined ? [] : data.fields;
   if (!Array.isArray(rows) || rows.length > 25) throw new EmbedInputError("Use up to 25 fields.");
-  const fields = rows.map(row => {
+  const fields = rows.flatMap(row => {
     const field = object(row);
     const name = text(field.name, "Field name", 256);
     const value = text(field.value, "Field text", 1024);
-    if (!name || !value) throw new EmbedInputError("Each field needs a name and text.");
-    return { name, value, inline: field.inline === true };
+    if ((!name || name === blankFieldText) && (!value || value === blankFieldText)) return [];
+    return [{ name: name || blankFieldText, value: value || blankFieldText, inline: field.inline === true }];
   });
   if (!title && !description && !author && !footer && !image && !thumbnail && !fields.length)
     throw new EmbedInputError("Add text, an image, or a field to the embed.");
