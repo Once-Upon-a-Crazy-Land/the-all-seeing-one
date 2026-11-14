@@ -469,8 +469,9 @@ async function loadEmbedChannels() {
     if ([...savedEmbedSelect.options].some(option => option.value === selectedMessage)) savedEmbedSelect.value = selectedMessage;
     embedChannels.replaceChildren(new Option(channels.length ? 'Select a channel' : 'No channels available', ''));
     for (const channel of channels) embedChannels.add(new Option('# ' + channel.name, channel.id));
-    if (channels.some(channel => channel.id === selected)) embedChannels.value = selected;
-    embedChannels.disabled = !channels.length;
+    if (editingEmbed) showSavedEmbedChannel(editingEmbed.selection);
+    else if (channels.some(channel => channel.id === selected)) embedChannels.value = selected;
+    embedChannels.disabled = !!editingEmbed || !channels.length;
     if (!channels.length) {
       embedChannelError = 'You and the bot need permission to send embeds in a channel.';
       showSaveToast(embedChannelError, true);
@@ -478,6 +479,7 @@ async function loadEmbedChannels() {
   } catch (error) {
     if (load !== embedChannelLoad || guildId !== state.guildId) return;
     embedChannels.replaceChildren(new Option('Could not load channels', ''));
+    if (editingEmbed) showSavedEmbedChannel(editingEmbed.selection);
     embedChannelError = error.message;
     showSaveToast(embedChannelError, true);
   }
@@ -507,15 +509,30 @@ function addEmbedField(field, focus = false) {
 $('#add-embed-field').addEventListener('click', () => addEmbedField(undefined, true));
 
 const embedEditFields = $('#embed-v2-edit-fields');
-const embedNewControls = [...embedForm.children].slice(
-  [...embedForm.children].indexOf(embedEditFields) + 1, -1
-);
+const lockedEmbedControls = [];
+const embedHeading = embedForm.querySelector('.cardhead h2');
+const embedCaption = embedForm.querySelector('.cardhead p');
+const newEmbedCaption = embedCaption.textContent;
+
+function showSavedEmbedChannel(selection) {
+  const channelId = selection.split('/')[0];
+  if (![...embedChannels.options].some(option => option.value === channelId)) {
+    const option = new Option('Saved destination channel', channelId);
+    option.dataset.savedDestination = '';
+    embedChannels.add(option);
+  }
+  embedChannels.value = channelId;
+}
 
 function clearEmbedEdit() {
   editingEmbed = undefined;
   embedEditFields.replaceChildren();
   embedEditFields.classList.add('hidden');
-  for (const control of embedNewControls) control.classList.remove('hidden');
+  for (const control of lockedEmbedControls.splice(0)) control.disabled = false;
+  embedChannels.querySelector('[data-saved-destination]')?.remove();
+  embedChannels.disabled = ![...embedChannels.options].some(option => option.value);
+  embedHeading.textContent = 'Send an embed';
+  embedCaption.textContent = newEmbedCaption;
   embedV2.disabled = false;
   savedEmbedName.required = true;
   savedEmbedName.readOnly = false;
@@ -564,16 +581,31 @@ async function loadSavedEmbed() {
       if (!blocks.length) throw new Error('This Components V2 message has no text to edit.');
     }
     clearEmbedEdit();
+    if (result.components) {
+      embedForm.reset();
+      embedFields.replaceChildren();
+      updateEmbedFieldLimit();
+    }
     editingEmbed = { path, selection: selectedMessage, version: result.version, v2: !!result.components };
     savedEmbedName.value = name;
     savedEmbedName.required = false;
     savedEmbedName.readOnly = true;
     $('#send-embed').textContent = 'Save edits';
-    embedV2.checked = false;
+    embedHeading.textContent = 'Edit embed';
+    embedCaption.textContent = result.components
+      ? 'Edit the text blocks in this Components V2 message.'
+      : 'Update the saved Discord message.';
+    embedV2.checked = !!result.components;
     embedV2.disabled = true;
-    embedChannels.labels[0].classList.add('hidden');
+    showSavedEmbedChannel(selectedMessage);
+    embedChannels.disabled = true;
     if (result.components) {
-      for (const control of embedNewControls) control.classList.add('hidden');
+      for (const id of ['embed-v2-accessory', 'embed-v2-help']) $('#' + id).classList.add('hidden');
+      for (const control of embedForm.querySelectorAll('input, textarea, button[type="button"]')) {
+        if (control.disabled) continue;
+        control.disabled = true;
+        lockedEmbedControls.push(control);
+      }
       embedEditFields.classList.remove('hidden');
       for (const [index, content] of blocks.entries()) {
         const label = document.createElement('label');
