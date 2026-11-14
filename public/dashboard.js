@@ -199,8 +199,8 @@ function renderAutoRoles() {
   for (const { roleId, hours } of rules) {
     const role = roles.find(role => role.id === roleId);
     const row = document.createElement('fieldset');
-    row.className = 'auto-role-row';
-    row.innerHTML = '<legend></legend><div class="form-grid"><label>Duration<select><option value="permanent">Permanent</option><option value="temporary">Temporary</option></select></label><label>Hours<input type="number" min="1" max="8760" step="1" required></label></div><button type="button" class="outline">Remove</button>';
+    row.className = 'embed-field';
+    row.innerHTML = '<legend></legend><div class="form-grid"><label>Duration<select><option value="permanent">Permanent</option><option value="temporary">Temporary</option></select></label><label>Hours<input type="number" min="1" max="8760" step="1" required></label></div><div class="embed-actions"><button type="button" class="outline">Remove</button></div>';
     row.querySelector('legend').textContent = role?.name ?? 'Unavailable role';
     const mode = row.querySelector('select');
     const length = row.querySelector('input');
