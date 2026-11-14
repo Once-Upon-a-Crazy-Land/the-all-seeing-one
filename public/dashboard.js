@@ -39,7 +39,7 @@ async function request(url, options) {
     if(response.status===404)throw new Error('This dashboard feature is unavailable on the server. Refresh and try again.');
     throw new Error('The dashboard server returned an unexpected response. Try again.');
   });
-  if(!response.ok)throw new Error(json?.error||'The dashboard request failed. Try again.');
+  if(!response.ok)throw Object.assign(new Error(json?.error||'The dashboard request failed. Try again.'), { code: json?.code });
   if(economySave){
     const system=state.data?.economySystems?.find(entry=>entry.id===state.economySystemId);
     if(system)Object.assign(system,{currency_symbol:json.currencySymbol,starting_balance:json.startingBalance,max_cash_balance:json.maxCashBalance,max_bank_balance:json.maxBankBalance,config:json.config});
@@ -833,6 +833,12 @@ async function loadSavedEmbed() {
     }
   } catch (error) {
     if (guildId === state.guildId && guildId === embedDraftGuild) {
+      if (error.code === 'saved_embed_missing') {
+        [...savedEmbedSelect.options].find(option => option.value === selectedMessage)?.remove();
+        savedEmbedSelect.value = '';
+        startNewEmbed();
+        return;
+      }
       savedEmbedSelect.value = editingEmbed?.selection ?? '';
       showSaveToast(error.message, true);
     }

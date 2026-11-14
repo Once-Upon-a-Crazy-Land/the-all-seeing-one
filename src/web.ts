@@ -259,6 +259,7 @@ const saveToolEmbed = db.prepare(`INSERT INTO saved_tool_embeds (guild_id, chann
   VALUES (?, ?, ?, ?) ON CONFLICT(guild_id, message_id) DO UPDATE SET name = excluded.name`);
 const listToolEmbeds = db.prepare(`SELECT channel_id AS channelId, message_id AS messageId, name
   FROM saved_tool_embeds WHERE guild_id = ? ORDER BY name COLLATE NOCASE, message_id`);
+const removeToolEmbed = db.prepare("DELETE FROM saved_tool_embeds WHERE guild_id = ? AND channel_id = ? AND message_id = ?");
 
 function toolEmbedName(value: unknown) {
   const name = typeof value === "string" ? value.trim() : "";
@@ -287,8 +288,7 @@ app.route(editEmbedPath).all(requireUser, canManage).all(async (req, res) => {
         !channel.permissionsFor(member)?.has(PermissionFlagsBits.ReadMessageHistory) ||
         !channel.permissionsFor(botMember)?.has(PermissionFlagsBits.ReadMessageHistory))
       return res.status(403).json({ error: "You and the bot need access to read and send messages in that channel." });
-    const message = await channel.messages.fetch({ message: messageId, force: true }).catch(() => null);
-    if (!message) return res.status(404).json({ error: "Discord message not found." });
+    const message = await channel.messages.fetch({ message: messageId, force: true });
     if (message.author.id !== bot.user?.id || !message.editable)
       return res.status(403).json({ error: "Only messages sent by this bot can be edited here." });
     const version = message.editedTimestamp;
@@ -310,6 +310,11 @@ app.route(editEmbedPath).all(requireUser, canManage).all(async (req, res) => {
       return res.json({ url: saved.url, version: saved.editedTimestamp });
     }
   } catch (error) {
+    // Discord's Unknown Message code confirms the saved message no longer exists.
+    if (error instanceof Error && "code" in error && error.code === 10008) {
+      removeToolEmbed.run(guild.id, channelId, messageId);
+      return res.status(404).json({ error: "Discord message not found.", code: "saved_embed_missing" });
+    }
     if (error instanceof EmbedInputError) return res.status(400).json({ error: error.message });
     res.status(502).json({ error: "Discord could not load or save the message." });
   }
