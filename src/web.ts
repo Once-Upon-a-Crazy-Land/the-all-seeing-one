@@ -168,7 +168,7 @@ app.get(autoRolesPath, requireUser, canManage, async (req, res) => {
   if (!actor?.permissions.has([PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles]))
     return res.status(403).json({ error: "Manage Server and Manage Roles permissions are required." });
   await guild.members.fetchMe();
-  const roles = guild.roles.cache.filter(role => canSetAutoRole(role, actor))
+  const roles = guild.roles.cache.filter(role => role.id !== guild.id && canSetAutoRole(role, actor))
     .map(({ id, name }) => ({ id, name }));
   res.json({ roles, rules: listAutoRoles(guild.id) });
 });
@@ -187,6 +187,7 @@ app.put(autoRolesPath + "/:roleId", requireUser, canManage, async (req, res) => 
   if (!actor?.permissions.has([PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles]))
     return res.status(403).json({ error: "Manage Server and Manage Roles permissions are required." });
   if (enabled) {
+    if (roleId === guild.id) return res.status(400).json({ error: "The @everyone role is already assigned to every member." });
     await guild.members.fetchMe({ force: true });
     const role = await guild.roles.fetch(roleId, { force: true });
     if (!role || !canSetAutoRole(role, actor))

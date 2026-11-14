@@ -2596,7 +2596,8 @@ select[data-economy-key="bonusRole"] {
 #auto-roles-card .cardhead { margin: 0; }
 #auto-roles-card .cardhead p { color: #f45f77; }
 #auto-role-list:empty, #auto-role-status:empty { display: none; }
-.auto-role-row { padding-top: 1rem; border-top: 1px solid var(--discord-border); }
+.auto-role-row { min-width: 0; margin: 0; padding: 1rem 0 0; border: 0; border-top: 1px solid var(--discord-border); }
+.auto-role-row legend { padding: 0 .5rem 0 0; font-weight: 700; }
 #embed-composer .form-grid { margin: 0; }
 #embed-composer .form-grid > label { min-width: 0; }
 #tools label:has(.embed-field-control > :required) > .embed-field-label::after {

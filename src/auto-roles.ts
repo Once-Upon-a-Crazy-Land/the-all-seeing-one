@@ -26,16 +26,18 @@ const forget = db.prepare(`DELETE FROM auto_role_expirations
   WHERE guild_id = ? AND role_id = ? AND user_id = ? AND joined_at = ? AND expires_at = ?`);
 
 export function listAutoRoles(guildId: string) {
-  return list.all(guildId) as { roleId: string; hours: number | null }[];
+  const rules = list.all(guildId) as { roleId: string; hours: number | null }[];
+  return rules.filter(rule => rule.roleId !== guildId);
 }
 
 export function saveAutoRole(guildId: string, roleId: string, hours: number | null | undefined) {
-  if (hours === undefined) remove.run(guildId, roleId);
+  if (hours === undefined || roleId === guildId) remove.run(guildId, roleId);
   else save.run(guildId, roleId, hours);
 }
 
 export function canSetAutoRole(role: Role, actor: GuildMember) {
-  return role.editable && (actor.id === actor.guild.ownerId || actor.roles.highest.comparePositionTo(role) > 0);
+  return role.id !== actor.guild.id && role.editable &&
+    (actor.id === actor.guild.ownerId || actor.roles.highest.comparePositionTo(role) > 0);
 }
 
 export async function assignAutoRoles(member: GuildMember) {
