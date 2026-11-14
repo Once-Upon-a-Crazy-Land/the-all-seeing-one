@@ -2621,6 +2621,7 @@ select[data-economy-key="bonusRole"] {
   pointer-events: none;
 }
 #embed-composer .cardhead { margin: 0; }
+#embed-composer .cardhead p { color: #f45f77; }
 #add-embed-field { justify-self: start; }
 #embed-fields { display: grid; gap: .75rem; }
 #embed-fields:empty { display: none; }
