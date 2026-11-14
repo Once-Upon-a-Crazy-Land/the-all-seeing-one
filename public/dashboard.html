@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard — Crazyland</title><link rel="icon" type="image/png" href="/images/gear.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/dashboard.css?v=saved-embed-editor"><link rel="stylesheet" href="/legal.css"><script src="/falling-gears.js" defer></script>
+<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard — Crazyland</title><link rel="icon" type="image/png" href="/images/gear.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/dashboard.css?v=auto-roles"><link rel="stylesheet" href="/legal.css"><script src="/falling-gears.js" defer></script>
 </head>
 <body class="app has-falling-gears">
   <div class="falling-gears" aria-hidden="true"></div>
@@ -113,7 +113,41 @@
 </div>
 </section>
 <section id="premium" class="panel hidden" aria-label="Premium"><details class="card settings-disclosure" data-disclosure="server-premium"><summary class="cardhead"><span><strong>Server premium</strong></span></summary></details></section>
-<section id="tools" class="panel hidden">
+<nav id="tools-tabs" class="level-tabs hidden" aria-label="Tools pages">
+  <button type="button" class="level-tab tools-child active" data-tools-page="embeds" aria-controls="tools" aria-current="page">Embeds</button>
+  <button type="button" class="level-tab tools-child" data-tools-page="welcome" aria-controls="tools-welcome">Welcome message</button>
+  <button type="button" class="level-tab tools-child" data-tools-page="auto-roles" aria-controls="tools-auto-roles">Auto roles</button>
+</nav>
+<section id="tools-auto-roles" class="panel hidden" aria-labelledby="auto-roles-heading">
+  <div id="auto-roles-card" class="card">
+    <div class="cardhead"><div><h2 id="auto-roles-heading">Auto roles</h2><p>Assign roles when members join. Duration changes apply to future joins.</p></div></div>
+    <label>Add a role
+      <select id="auto-role-add" disabled><option value="">Select a role</option></select>
+    </label>
+    <div id="auto-role-list"></div>
+    <p id="auto-role-status" role="status"></p>
+  </div>
+</section>
+<section id="tools-welcome" class="panel hidden" aria-labelledby="tools-welcome-heading">
+  <div id="welcome-form" class="card">
+    <div class="cardhead"><div><h2 id="tools-welcome-heading">Welcome message</h2><p>Send a welcome card when a new member joins.</p></div></div>
+    <label>Destination channel
+      <select id="welcome-channel" disabled><option value="">Disabled</option></select>
+    </label>
+  </div>
+  <div id="goodbye-form" class="card">
+    <div class="cardhead"><div><h2 id="tools-goodbye-heading">Goodbye message</h2><p>Send a goodbye card when a member leaves.</p></div></div>
+    <label>Destination channel
+      <select id="goodbye-channel" disabled><option value="">Disabled</option></select>
+    </label>
+  </div>
+  <aside class="card" aria-labelledby="welcome-preview-heading">
+    <h2 id="welcome-preview-heading">Welcome card preview</h2>
+    <img id="welcome-preview" class="hidden" alt="Sample welcome card" width="1008" height="189">
+    <p id="welcome-preview-status" role="status"></p>
+  </aside>
+</section>
+<section id="tools" class="panel hidden" aria-label="Embeds">
   <div class="card embed-library">
     <label>Saved embeds
       <select id="embed-saved" form="embed-composer" aria-describedby="embed-saved-help"><option value="">New embed</option></select>
@@ -187,4 +221,4 @@
     </div>
   </fieldset>
 </template>
-<nav class="legal-links dashboard-legal" aria-label="Legal"><a href="/privacy.html" target="_blank" rel="noopener">Privacy Policy</a><a href="/terms.html" target="_blank" rel="noopener">Terms of Service</a></nav></main><div id="system-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="system-modal-title"><button class="modal-backdrop" aria-label="Close"></button><div class="modal-card"><div class="modal-head"><div><small>LEVELING SYSTEM</small><h2 id="system-modal-title">System settings</h2></div><button id="close-system-modal" class="modal-close" aria-label="Close">×</button></div><label>System name<input id="modal-system-name" maxlength="50"></label><div class="modal-toggle"><div><b>System enabled</b><small>Members can earn XP in this system.</small></div><label class="switch"><input id="modal-system-enabled" type="checkbox"><span></span></label></div><div class="template-zone"><div><b>Use another system as template</b><small>Copies settings and rewards without copying member XP.</small></div><div class="template-controls"><div class="template-select-wrap"><select id="template-system"></select><span id="template-placeholder">No system selected</span></div><button id="apply-template" disabled>Apply template</button></div><p class="template-warning hidden">Applying replaces this system's settings, access rules, announcements, and role rewards. Member XP is kept.</p></div><div class="danger-zone"><div><b>Delete leveling system</b><small>This permanently removes its XP and settings.</small></div><button id="modal-delete-system">Delete system</button></div></div></div><script src="/dashboard.js?v=saved-embed-editor"></script></body></html>
+<nav class="legal-links dashboard-legal" aria-label="Legal"><a href="/privacy.html" target="_blank" rel="noopener">Privacy Policy</a><a href="/terms.html" target="_blank" rel="noopener">Terms of Service</a></nav></main><div id="system-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="system-modal-title"><button class="modal-backdrop" aria-label="Close"></button><div class="modal-card"><div class="modal-head"><div><small>LEVELING SYSTEM</small><h2 id="system-modal-title">System settings</h2></div><button id="close-system-modal" class="modal-close" aria-label="Close">×</button></div><label>System name<input id="modal-system-name" maxlength="50"></label><div class="modal-toggle"><div><b>System enabled</b><small>Members can earn XP in this system.</small></div><label class="switch"><input id="modal-system-enabled" type="checkbox"><span></span></label></div><div class="template-zone"><div><b>Use another system as template</b><small>Copies settings and rewards without copying member XP.</small></div><div class="template-controls"><div class="template-select-wrap"><select id="template-system"></select><span id="template-placeholder">No system selected</span></div><button id="apply-template" disabled>Apply template</button></div><p class="template-warning hidden">Applying replaces this system's settings, access rules, announcements, and role rewards. Member XP is kept.</p></div><div class="danger-zone"><div><b>Delete leveling system</b><small>This permanently removes its XP and settings.</small></div><button id="modal-delete-system">Delete system</button></div></div></div><script src="/dashboard.js?v=auto-roles"></script></body></html>

@@ -1,15 +1,18 @@
 import { systemAvailable } from "./premium.js";
 import { xpRange } from "./xp-range.js";
-import { AttachmentBuilder, Client, Events, GatewayIntentBits, PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
+import { AttachmentBuilder, Client, Events, GatewayIntentBits, Partials, PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
 import { config } from "./config.js";
 import { db, ensureDefaultSystem, levelFromXp, systemModuleEnabled, xpForLevel } from "./db.js";
 import { renderLevelCard } from "./level-card.js";
+import { sendMemberCard } from "./welcome.js";
+import { assignAutoRoles, startAutoRoleExpiry } from "./auto-roles.js";
 import { economyCommands, handleEconomyCommand, rewardEconomyMessage } from "./economy.js";
 
 import { moderationCommands, handleModerationCommand, handleHoneypotMessage, handleDiscordTimeout } from "./moderation.js";
 import { handleAutoModAction } from "./automod.js";
 
 export const bot = new Client({
+  partials: [Partials.GuildMember],
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers, GatewayIntentBits.AutoModerationExecution, GatewayIntentBits.GuildModeration]
 });
 bot.on(Events.GuildAuditLogEntryCreate, (entry, guild) => {
@@ -30,6 +33,15 @@ const xpRoleRules = db.prepare("SELECT role_id, mode FROM system_role_filters WH
 
 type ContentFilter = "any" | "text" | "image" | "video" | "link" | "file" | "embed" | "sound" | "poll" | "sticker" | "forward" | "word";
 type LevelingSystem = { id: number; name: string; enabled: number; min_xp: number; max_xp: number; min_xp_values: string; max_xp_values: string; specific_words: string; cooldown_seconds: number; content_filter: string; announce_destination: "none" | "current" | "dm" | "channel"; announce_channel_id: string | null; announce_message: string };
+
+bot.on(Events.GuildMemberAdd, member => {
+  void assignAutoRoles(member).catch(error => console.error("Automatic roles failed", member.guild.id, error));
+  void sendMemberCard(member, "welcome").catch(error => console.error("Welcome message failed", member.guild.id, error));
+});
+
+bot.on(Events.GuildMemberRemove, member => {
+  void sendMemberCard(member, "goodbye").catch(error => console.error("Goodbye message failed", member.guild.id, error));
+});
 
 bot.on(Events.MessageCreate, async message => {
   if (await handleHoneypotMessage(message)) return;
@@ -223,6 +235,7 @@ bot.on(Events.InteractionCreate, async interaction => {
 });
 
 bot.once(Events.ClientReady, async client => {
+  startAutoRoleExpiry(client);
   const serverNames = client.guilds.cache.map(guild => guild.name).sort((a, b) => a.localeCompare(b));
   const serverCount = serverNames.length;
   console.log(`Discord bot ready as ${client.user.tag} in ${serverCount} ${serverCount === 1 ? "server" : "servers"}`);

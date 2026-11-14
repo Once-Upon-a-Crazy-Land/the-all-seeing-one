@@ -6,7 +6,7 @@ for (const file of ["Lato-Regular.ttf", "Lato-Bold.ttf"]) {
   if (!GlobalFonts.registerFromPath(path, "Card Sans")) throw new Error(`Could not load card font: ${file}`);
 }
 
-export type LevelCardData = {
+type ProfileCardData = {
   username: string;
   avatarUrl: string;
   avatarDecorationUrl?: string | null;
@@ -14,6 +14,9 @@ export type LevelCardData = {
   nameplatePalette?: string | null;
   accentColor?: number | null;
   bannerUrl?: string | null;
+};
+
+export type LevelCardData = ProfileCardData & {
   systemName: string;
   level: number;
   rank: number;
@@ -93,7 +96,7 @@ function prominentColor(image: Image) {
   return `rgb(${Math.round(winner.red / winner.count)}, ${Math.round(winner.green / winner.count)}, ${Math.round(winner.blue / winner.count)})`;
 }
 
-export async function renderLevelCard(data: LevelCardData): Promise<Buffer> {
+async function renderProfileCard(data: ProfileCardData, label: string, welcome: boolean) {
   // Discord nameplates are only 672×126. A 1008×189 card keeps their exact
   // 5.33:1 ratio while limiting enlargement to 1.5× to avoid visible blur.
   const width = 1008;
@@ -108,7 +111,7 @@ export async function renderLevelCard(data: LevelCardData): Promise<Buffer> {
   const profileColor = (nameplate ? prominentColor(nameplate) : null)
     ?? (data.accentColor != null ? `#${data.accentColor.toString(16).padStart(6, "0")}` : null)
     ?? await dominantColor(data.bannerUrl)
-    ?? "#d5ff38";
+    ?? (welcome ? "#f45f77" : "#d5ff38");
   roundedRect(ctx, 0, 0, width, height, 20);
   ctx.save();
   ctx.clip();
@@ -120,19 +123,21 @@ export async function renderLevelCard(data: LevelCardData): Promise<Buffer> {
     // The source and card have the same aspect ratio: no crop and no distortion.
     ctx.drawImage(nameplate, 0, 0, width, height);
   } else {
-    const fallback = ctx.createLinearGradient(0, 0, width, height);
-    fallback.addColorStop(0, "#313338");
-    fallback.addColorStop(0.65, "#2b2d31");
+    const fallback = ctx.createLinearGradient(0, 0, width, 0);
+    fallback.addColorStop(0, "#282828");
+    fallback.addColorStop(0.65, "#282828");
     fallback.addColorStop(1, profileColor);
     ctx.fillStyle = fallback;
     ctx.fillRect(0, 0, width, height);
   }
   const shade = ctx.createLinearGradient(0, 0, width, 0);
-  shade.addColorStop(0, "#0e0f0d40");
-  shade.addColorStop(0.55, "#0e0f0d20");
-  shade.addColorStop(1, "#0e0f0d00");
-  ctx.fillStyle = shade;
-  ctx.fillRect(0, 0, width, height);
+  shade.addColorStop(0, "#10101040");
+  shade.addColorStop(0.55, "#10101020");
+  shade.addColorStop(1, "#10101000");
+  if (nameplate) {
+    ctx.fillStyle = shade;
+    ctx.fillRect(0, 0, width, height);
+  }
   ctx.restore();
 
   ctx.save();
@@ -143,7 +148,7 @@ export async function renderLevelCard(data: LevelCardData): Promise<Buffer> {
     const avatar = await loadImage(data.avatarUrl);
     ctx.drawImage(avatar, 31, 32, 120, 120);
   } catch {
-    ctx.fillStyle = "#44463f";
+    ctx.fillStyle = "#444444";
     ctx.fillRect(31, 32, 120, 120);
   }
   ctx.restore();
@@ -159,15 +164,31 @@ export async function renderLevelCard(data: LevelCardData): Promise<Buffer> {
 
   ctx.shadowColor = "#000000dd";
   ctx.shadowBlur = 5;
-  ctx.fillStyle = "#d7d8d1";
+  ctx.fillStyle = "#d8d8d8";
   ctx.font = "700 11px Card Sans";
-  ctx.fillText(data.systemName.toUpperCase(), 180, 34);
+  ctx.fillText(label.toUpperCase(), 180, welcome ? 51 : 34, width - 220);
   ctx.fillStyle = profileColor;
   ctx.font = "700 31px Card Sans";
-  const capitalizedUsername = data.username.charAt(0).toUpperCase() + data.username.slice(1);
-  const displayName = capitalizedUsername.length > 24 ? `${capitalizedUsername.slice(0, 23)}…` : capitalizedUsername;
-  ctx.fillText(displayName, 180, 75);
+  const username = welcome ? data.username : data.username.charAt(0).toUpperCase() + data.username.slice(1);
+  const displayName = username.length > 24 ? `${username.slice(0, 23)}…` : username;
+  ctx.fillText(displayName, 180, welcome ? 95 : 75);
   ctx.shadowBlur = 0;
+  return { canvas, ctx, profileColor };
+}
+
+export type MemberCardKind = "welcome" | "goodbye";
+
+export async function renderMemberCard(data: ProfileCardData, serverName: string, kind: MemberCardKind): Promise<Buffer> {
+  const goodbye = kind === "goodbye";
+  const { canvas, ctx } = await renderProfileCard(data, goodbye ? "Goodbye" : "Welcome", true);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "700 17px Card Sans";
+  ctx.fillText(goodbye ? `Left ${serverName}` : `Welcome to ${serverName}!`, 180, 129, canvas.width - 220);
+  return canvas.encode("png");
+}
+
+export async function renderLevelCard(data: LevelCardData): Promise<Buffer> {
+  const { canvas, ctx, profileColor } = await renderProfileCard(data, data.systemName, false);
 
   ctx.fillStyle = "#ffffff";
   ctx.font = "700 17px Card Sans";

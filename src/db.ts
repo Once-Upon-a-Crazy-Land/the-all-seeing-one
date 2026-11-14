@@ -12,6 +12,14 @@ db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
 if (persistent && !fs.existsSync(`${config.databasePath}.initialized`)) markDatabaseInitialized(config.databasePath, true);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS welcome_settings (
+    guild_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS goodbye_settings (
+    guild_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS guild_settings (
     guild_id TEXT PRIMARY KEY,
     enabled INTEGER NOT NULL DEFAULT 0,

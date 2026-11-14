@@ -132,15 +132,206 @@ function showSection(section){
   $('#level-tabs').classList.toggle('hidden',!levels);
   $('#economy-tabs').classList.toggle('hidden',!economy);
   $('#moderation-tabs').classList.toggle('hidden',section!=='moderation');
+  $('#tools-tabs').classList.toggle('hidden',section!=='tools');
   $('#system-toolbar').classList.toggle('hidden',!levels);
   $('#economy-system-toolbar')?.classList.toggle('hidden',!economy);
   document.querySelectorAll('.panel').forEach(panel=>panel.classList.add('hidden'));
   if(economy){renderEconomySystemSelect();switchEconomySystem(state.economySystemId);renderEconomyIssues();$('#economy').classList.remove('hidden');return showEconomyPage(document.querySelector('.economy-child.active')?.dataset.economyPage||'general')}
   else if(levels)showTab(document.querySelector('#level-tabs .level-tab.active')?.dataset.tab||'overview');
   else if(section==='premium'){$('#premium').classList.remove('hidden');$('#title').textContent='Premium';$('#crumb').textContent='DASHBOARD / PREMIUM';renderPremium()}
-  else if(section==='tools'){$('#tools').classList.remove('hidden');$('#title').textContent='Tools';$('#crumb').textContent='DASHBOARD / TOOLS';return loadEmbedChannels()}
+  else if(section==='tools')return showToolsPage($('#tools-tabs .active')?.dataset.toolsPage||'embeds');
   else if(section==='moderation'){$('#moderation').classList.remove('hidden');showModerationPage(document.querySelector('.moderation-child.active')?.dataset.moderationPage||'overview');return loadModeration()}
 }
+
+function showToolsPage(page) {
+  const welcome = page === 'welcome';
+  const autoRoles = page === 'auto-roles';
+  for (const button of document.querySelectorAll('.tools-child')) {
+    const active = button.dataset.toolsPage === page;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+  $('#tools').classList.toggle('hidden', page !== 'embeds');
+  $('#tools-welcome').classList.toggle('hidden', !welcome);
+  $('#tools-auto-roles').classList.toggle('hidden', !autoRoles);
+  const title = autoRoles ? 'Auto roles' : welcome ? 'Welcome message' : 'Embeds';
+  $('#title').textContent = title;
+  $('#crumb').textContent = 'DASHBOARD / TOOLS / ' + title.toUpperCase();
+  if (autoRoles) return loadAutoRoles();
+  if (welcome) loadWelcomePreview();
+  return welcome ? Promise.all(memberCardLoaders.map(load => load())) : loadEmbedChannels();
+}
+
+const autoRoleAdd = $('#auto-role-add');
+const autoRoleList = $('#auto-role-list');
+const autoRoleStatus = $('#auto-role-status');
+const autoRolesUrl = guildId => `/api/guilds/${guildId}/tools/auto-roles`;
+let autoRolesVersion = 0;
+let autoRolesData;
+
+async function loadAutoRoles() {
+  const guildId = state.guildId;
+  if (autoRolesData?.guildId === guildId && autoRolesData.saving) return;
+  const version = ++autoRolesVersion;
+  autoRolesData = undefined;
+  autoRoleAdd.disabled = true;
+  autoRoleList.replaceChildren();
+  autoRoleStatus.textContent = 'Loading roles...';
+  try {
+    const data = await request(autoRolesUrl(guildId));
+    if (version !== autoRolesVersion || guildId !== state.guildId) return;
+    autoRolesData = { ...data, guildId };
+    autoRoleStatus.textContent = '';
+    renderAutoRoles();
+  } catch (error) {
+    if (version === autoRolesVersion && guildId === state.guildId) autoRoleStatus.textContent = error.message;
+  }
+}
+
+function renderAutoRoles() {
+  const { roles, rules } = autoRolesData;
+  const available = roles.filter(role => !rules.some(rule => rule.roleId === role.id));
+  autoRoleAdd.replaceChildren(new Option(available.length ? 'Select a role' : 'No available roles', ''));
+  for (const role of available) autoRoleAdd.add(new Option(role.name, role.id));
+  autoRoleAdd.disabled = !available.length;
+  autoRoleList.replaceChildren();
+  for (const { roleId, hours } of rules) {
+    const role = roles.find(role => role.id === roleId);
+    const row = document.createElement('fieldset');
+    row.className = 'auto-role-row';
+    row.innerHTML = '<legend></legend><div class="form-grid"><label>Duration<select><option value="permanent">Permanent</option><option value="temporary">Temporary</option></select></label><label>Hours<input type="number" min="1" max="8760" step="1" required></label></div><button type="button" class="outline">Remove</button>';
+    row.querySelector('legend').textContent = role?.name ?? 'Unavailable role';
+    const mode = row.querySelector('select');
+    const length = row.querySelector('input');
+    mode.value = hours === null ? 'permanent' : 'temporary';
+    length.value = hours ?? 24;
+    length.closest('label').classList.toggle('hidden', hours === null);
+    mode.disabled = length.disabled = !role;
+    mode.onchange = () => void updateAutoRole(roleId, true, mode.value === 'permanent' ? null : Number(length.value));
+    length.onchange = () => {
+      if (!length.reportValidity()) return;
+      void updateAutoRole(roleId, true, Number(length.value));
+    };
+    row.querySelector('button').onclick = () => void updateAutoRole(roleId, false, null);
+    autoRoleList.append(row);
+  }
+}
+
+async function updateAutoRole(roleId, enabled, hours) {
+  const data = autoRolesData;
+  if (!data || data.saving || serverSwitchPending || data.guildId !== state.guildId) return;
+  data.saving = true;
+  autoRoleAdd.disabled = true;
+  for (const control of autoRoleList.querySelectorAll('select, input, button')) control.disabled = true;
+  try {
+    await request(`${autoRolesUrl(data.guildId)}/${roleId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, hours })
+    });
+    const existing = data.rules.findIndex(rule => rule.roleId === roleId);
+    if (existing >= 0) data.rules.splice(existing, 1);
+    if (enabled) data.rules.splice(existing < 0 ? data.rules.length : existing, 0, { roleId, hours });
+    if (data === autoRolesData) showSaveToast('Auto roles saved');
+  } catch (error) {
+    if (data === autoRolesData) showSaveToast(error.message, true);
+  } finally {
+    data.saving = false;
+    if (data === autoRolesData && data.guildId === state.guildId) renderAutoRoles();
+  }
+}
+
+autoRoleAdd.onchange = () => {
+  if (autoRoleAdd.value) void updateAutoRole(autoRoleAdd.value, true, null);
+};
+
+const preview = $('#welcome-preview');
+const previewStatus = $('#welcome-preview-status');
+preview.onload = () => {
+  preview.classList.remove('hidden');
+  previewStatus.textContent = '';
+};
+preview.onerror = () => {
+  preview.classList.add('hidden');
+  previewStatus.textContent = 'Could not load the welcome card preview.';
+};
+
+function loadWelcomePreview() {
+  const src = `/api/guilds/${state.guildId}/tools/welcome/preview`;
+  if (preview.getAttribute('src') === src && !preview.classList.contains('hidden')) return;
+  preview.classList.add('hidden');
+  previewStatus.textContent = 'Loading preview...';
+  preview.src = src;
+}
+
+const memberCardLoaders = ['welcome', 'goodbye'].map(kind => {
+  const channelSelect = $('#' + kind + '-channel');
+  const settingsUrl = guildId => `/api/guilds/${guildId}/tools/${kind}`;
+  let loadVersion = 0;
+  let saving = false;
+  let savedChannel = '';
+
+  async function loadSettings() {
+    if (saving) return;
+    const guildId = state.guildId;
+    const load = ++loadVersion;
+    channelSelect.disabled = true;
+    channelSelect.replaceChildren(new Option('Loading channels...', ''));
+    try {
+      const { channelId, channels } = await request(settingsUrl(guildId));
+      if (load !== loadVersion || guildId !== state.guildId) return;
+      channelSelect.replaceChildren(new Option('Disabled', ''));
+      for (const channel of channels) channelSelect.add(new Option('# ' + channel.name, channel.id));
+      if (channelId && !channels.some(channel => channel.id === channelId)) {
+        const option = new Option('Unavailable channel', channelId);
+        option.disabled = true;
+        channelSelect.add(option);
+      }
+      savedChannel = channelId ?? '';
+      channelSelect.value = savedChannel;
+      channelSelect.disabled = false;
+    } catch (error) {
+      if (load !== loadVersion || guildId !== state.guildId) return;
+      channelSelect.replaceChildren(new Option('Could not load channels', ''));
+      showSaveToast(error.message, true);
+    }
+  }
+
+  channelSelect.addEventListener('change', async () => {
+    if (channelSelect.disabled || serverSwitchPending) {
+      channelSelect.value = savedChannel;
+      return;
+    }
+    const guildId = state.guildId;
+    const channelId = channelSelect.value || null;
+    saving = true;
+    channelSelect.disabled = true;
+    try {
+      await request(settingsUrl(guildId), {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId })
+      });
+      if (guildId === state.guildId) {
+        savedChannel = channelId ?? '';
+        showSaveToast(`${kind === 'welcome' ? 'Welcome' : 'Goodbye'} settings saved`);
+      }
+    } catch (error) {
+      if (guildId === state.guildId) {
+        channelSelect.value = savedChannel;
+        showSaveToast(error.message, true);
+      }
+    } finally {
+      saving = false;
+      if (guildId === state.guildId) channelSelect.disabled = false;
+      else if (!$('#tools-welcome').classList.contains('hidden')) void loadSettings();
+    }
+  });
+  return loadSettings;
+});
+
+document.querySelectorAll('.tools-child').forEach(button => {
+  button.onclick = () => showToolsPage(button.dataset.toolsPage);
+});
 document.querySelectorAll('.tab').forEach(button=>button.onclick=()=>{
   if (!state.data || serverSwitchPending) return;
   showSection(button.dataset.section);

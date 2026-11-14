@@ -16,6 +16,9 @@ import { enforceShopItemLimit, premiumStatus, createPremiumSubscription, activat
 import { moderationSettings, moderationCases, validateWarningRules } from "./moderation.js";
 import { autoModError, deleteAutoModRule, listAutoModRules, writeAutoModRule } from "./automod.js";
 import { composeEmbed, composeV2Container, EmbedInputError, updateV2Text } from "./embed-composer.js";
+import { canSendWelcome, renderGuildMemberCard, setMemberCardChannel, memberCardChannelId } from "./welcome.js";
+import { renderMemberCard } from "./level-card.js";
+import { canSetAutoRole, listAutoRoles, saveAutoRole } from "./auto-roles.js";
 
 const app = express();
 if (config.redirectUri.startsWith("https://")) app.set("trust proxy", 1);
@@ -156,6 +159,83 @@ function canManage(req: Request, res: Response, next: NextFunction) {
 }
 
 const paymentOrigin = new URL(config.redirectUri).origin;
+
+const autoRolesPath = "/api/guilds/:guildId/tools/auto-roles";
+app.get(autoRolesPath, requireUser, canManage, async (req, res) => {
+  const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+
+  const actor = await guild.members.fetch({ user: req.session!.user!.id, force: true }).catch(() => null);
+  if (!actor?.permissions.has([PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles]))
+    return res.status(403).json({ error: "Manage Server and Manage Roles permissions are required." });
+  await guild.members.fetchMe();
+  const roles = guild.roles.cache.filter(role => canSetAutoRole(role, actor))
+    .map(({ id, name }) => ({ id, name }));
+  res.json({ roles, rules: listAutoRoles(guild.id) });
+});
+
+app.put(autoRolesPath + "/:roleId", requireUser, canManage, async (req, res) => {
+  if (req.headers.origin !== paymentOrigin || !req.is("application/json"))
+    return res.status(403).json({ error: "Invalid request" });
+  const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+  const roleId = String(req.params.roleId);
+  const { enabled, hours } = req.body ?? {};
+  if (!/^\d{17,20}$/.test(roleId) || typeof enabled !== "boolean" ||
+      (enabled && hours !== null && (!Number.isInteger(hours) || hours < 1 || hours > 8760)))
+    return res.status(400).json({ error: "Choose Permanent or enter 1 to 8,760 hours." });
+
+  const actor = await guild.members.fetch({ user: req.session!.user!.id, force: true }).catch(() => null);
+  if (!actor?.permissions.has([PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles]))
+    return res.status(403).json({ error: "Manage Server and Manage Roles permissions are required." });
+  if (enabled) {
+    await guild.members.fetchMe({ force: true });
+    const role = await guild.roles.fetch(roleId, { force: true });
+    if (!role || !canSetAutoRole(role, actor))
+      return res.status(400).json({ error: "Choose a role that you and the bot can manage." });
+  }
+  saveAutoRole(guild.id, roleId, enabled ? hours : undefined);
+  res.json({ roleId, hours: enabled ? hours : null });
+});
+
+app.get("/api/guilds/:guildId/tools/welcome/preview", requireUser, canManage, async (req, res) => {
+  const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+  const user = req.session!.user!;
+  const avatarUrl = user.avatar
+    ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=256`
+    : path.resolve("public/images/gear.png");
+  const member = await guild.members.fetch(user.id).catch(() => null);
+  const image = member
+    ? await renderGuildMemberCard(member, "welcome")
+    : await renderMemberCard({ username: user.username, avatarUrl }, guild.name, "welcome");
+  res.set("Cache-Control", "private, no-store").type("png").send(image);
+});
+
+for (const kind of ["welcome", "goodbye"] as const) {
+  const memberCardPath = "/api/guilds/:guildId/tools/" + kind;
+  app.get(memberCardPath, requireUser, canManage, async (req, res) => {
+    const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+    const botMember = await guild.members.fetchMe();
+    const channels = [...guild.channels.cache.values()]
+      .filter(channel => canSendWelcome(channel, botMember))
+      .map(({ id, name }) => ({ id, name }));
+    res.json({ channelId: memberCardChannelId(guild.id, kind), channels });
+  });
+
+  app.put(memberCardPath, requireUser, canManage, async (req, res) => {
+    if (req.headers.origin !== paymentOrigin || !req.is("application/json"))
+      return res.status(403).json({ error: "Invalid request" });
+    const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+    const channelId = req.body?.channelId;
+    if (channelId !== null && (typeof channelId !== "string" || !/^\d{17,20}$/.test(channelId)))
+      return res.status(400).json({ error: `Choose a ${kind} channel.` });
+    if (channelId !== null) {
+      const channel = await guild.channels.fetch(channelId, { force: true }).catch(() => null);
+      const allowed = canSendWelcome(channel, await guild.members.fetchMe({ force: true }));
+      if (!allowed) return res.status(400).json({ error: "Choose a channel where the bot can send messages and attach files." });
+    }
+    setMemberCardChannel(guild.id, kind, channelId);
+    res.json({ channelId });
+  });
+}
 
 function canSendComposedEmbed(
   channel: import("discord.js").GuildBasedChannel | null,

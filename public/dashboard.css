@@ -2588,6 +2588,15 @@ select[data-economy-key="bonusRole"] {
 }
 
 #embed-composer { display: grid; gap: 1rem; }
+:is(#welcome-form, #goodbye-form) { display: grid; gap: 1rem; }
+:is(#welcome-form, #goodbye-form) .cardhead { margin: 0; }
+#welcome-preview { display: block; max-width: 100%; height: auto; }
+#welcome-preview.hidden, #welcome-preview-status:empty { display: none; }
+#auto-roles-card, #auto-role-list { display: grid; gap: 1rem; }
+#auto-roles-card .cardhead { margin: 0; }
+#auto-roles-card .cardhead p { color: #f45f77; }
+#auto-role-list:empty, #auto-role-status:empty { display: none; }
+.auto-role-row { padding-top: 1rem; border-top: 1px solid var(--discord-border); }
 #embed-composer .form-grid { margin: 0; }
 #embed-composer .form-grid > label { min-width: 0; }
 #tools label:has(.embed-field-control > :required) > .embed-field-label::after {
@@ -2621,7 +2630,7 @@ select[data-economy-key="bonusRole"] {
   pointer-events: none;
 }
 #embed-composer .cardhead { margin: 0; }
-#embed-composer .cardhead p { color: #f45f77; }
+:is(#embed-composer, #welcome-form, #goodbye-form) .cardhead p { color: #f45f77; }
 #add-embed-field { justify-self: start; }
 #embed-fields { display: grid; gap: .75rem; }
 #embed-fields:empty { display: none; }
