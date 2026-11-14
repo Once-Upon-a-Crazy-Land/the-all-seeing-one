@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard — Crazyland</title><link rel="icon" type="image/png" href="/images/gear.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/dashboard.css?v=embed-library-alignment"><link rel="stylesheet" href="/legal.css"><script src="/falling-gears.js" defer></script>
+<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard — Crazyland</title><link rel="icon" type="image/png" href="/images/gear.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/dashboard.css?v=stacked-embed-fields"><link rel="stylesheet" href="/legal.css"><script src="/falling-gears.js" defer></script>
 </head>
 <body class="app has-falling-gears">
   <div class="falling-gears" aria-hidden="true"></div>
@@ -210,11 +210,11 @@
   </aside>
 </section>
 <template id="embed-field-template">
-  <fieldset class="embed-field">
+  <fieldset class="embed-field embed-composer-field">
     <legend>Embed field</legend>
     <div class="form-grid">
       <label><span class="embed-field-label">Name</span><span class="embed-field-control"><input data-field="name" maxlength="256"></span></label>
-      <label><span class="embed-field-label">Text</span><span class="embed-field-control"><textarea data-field="value" maxlength="1024" rows="2"></textarea></span></label>
+      <label><span class="embed-field-label">Text</span><span class="embed-field-control"><textarea data-field="value" maxlength="1024" rows="3"></textarea></span></label>
     </div>
     <div class="embed-actions">
       <label class="switch embed-inline-toggle"><input data-field="inline" type="checkbox" role="switch"><span aria-hidden="true"></span>Display inline</label>
