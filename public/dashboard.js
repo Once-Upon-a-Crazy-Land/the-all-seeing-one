@@ -642,7 +642,7 @@ async function loadEmbedChannels() {
   const load = ++embedChannelLoad;
   if (embedDraftGuild !== guildId) {
     clearEmbedEdit();
-    savedEmbedSelect.replaceChildren(new Option('New embed', ''));
+    resetSavedEmbedOptions();
     embedForm.reset();
     embedFields.replaceChildren();
     updateEmbedFieldLimit();
@@ -657,7 +657,7 @@ async function loadEmbedChannels() {
     const { channels, saved } = await request(embedUrl(guildId));
     if (load !== embedChannelLoad || guildId !== state.guildId) return;
     const selectedMessage = savedEmbedSelect.value;
-    savedEmbedSelect.replaceChildren(new Option('New embed', ''));
+    resetSavedEmbedOptions();
     for (const entry of saved) rememberSavedEmbed(entry);
     if ([...savedEmbedSelect.options].some(option => option.value === selectedMessage)) savedEmbedSelect.value = selectedMessage;
     embedChannels.replaceChildren(new Option(channels.length ? 'Select a channel' : 'No channels available', ''));
@@ -739,13 +739,26 @@ function rememberSavedEmbed(entry) {
   else savedEmbedSelect.add(new Option(entry.name, value));
 }
 
+function resetSavedEmbedOptions() {
+  const placeholder = new Option('Select a saved embed', '', true, true);
+  placeholder.disabled = true;
+  savedEmbedSelect.replaceChildren(placeholder);
+}
+
 function startNewEmbed() {
   clearEmbedEdit();
   embedForm.reset();
+  savedEmbedSelect.value = '';
   embedFields.replaceChildren();
   updateEmbedFieldLimit();
   renderEmbedPreview();
 }
+
+$('#new-embed').addEventListener('click', () => {
+  if (embedSending || loadingEmbed || serverSwitchPending) return;
+  startNewEmbed();
+  savedEmbedName.focus();
+});
 
 async function loadSavedEmbed() {
   if (embedSending || loadingEmbed || state.guildId !== embedDraftGuild) return;
