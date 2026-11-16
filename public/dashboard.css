@@ -2603,15 +2603,13 @@ select[data-economy-key="bonusRole"] {
   color: #f45f77;
   margin-left: .3em;
 }
-#tools .embed-field-control {
+#embed-composer .embed-field-control {
   display: block;
   position: relative;
-}
-#tools .embed-field-control > :is(input, textarea, select) {
-  margin-top: 0;
-}
-#tools .embed-field-control {
   margin-top: 8px;
+}
+#embed-composer .embed-field-control > :is(input, textarea, select) {
+  margin-top: 0;
 }
 #tools .embed-field-control:has(> [data-embed-missing])::after {
   content: "";
@@ -2629,7 +2627,7 @@ select[data-economy-key="bonusRole"] {
   pointer-events: none;
 }
 #embed-composer .cardhead { margin: 0; }
-:is(#embed-composer, #welcome-form, #goodbye-form) .cardhead p { color: #f45f77; }
+:is(#embed-composer, #welcome-form, #goodbye-form, #creator-alert-editor) .cardhead p { color: #f45f77; }
 #add-embed-field { justify-self: start; }
 #embed-fields { display: grid; gap: .75rem; }
 #embed-fields:empty { display: none; }
@@ -2647,7 +2645,7 @@ textarea { scrollbar-width: none; }
 #creator-alert-fields label > :is(input, select, textarea),
 .creator-alert-avatar-controls { margin-top: 8px; }
 #creator-alert-fields label > small,
-.creator-alert-avatar-status, .creator-alert-avatar-help { color: var(--discord-faint); font-size: 10px; line-height: 1.4; }
+.creator-alert-avatar-help { color: var(--discord-faint); font-size: 10px; line-height: 1.4; }
 #creator-alert-fields textarea { width: 100%; height: auto; resize: vertical; }
 #creator-alert-fields :is(input, textarea) { text-transform: none; }
 .creator-alert-avatar-controls { display: grid; grid-template-columns: minmax(0, 1fr) 30px; gap: 8px; align-items: center; }
@@ -2666,21 +2664,18 @@ textarea { scrollbar-width: none; }
 @media (prefers-reduced-motion: reduce) {
   .creator-alert-avatar-controls button span { transition: none; }
 }
-.creator-alert-avatar-status, .creator-alert-avatar-help { display: block; margin-top: 5px; overflow-wrap: anywhere; }
-.creator-alert-avatar-status:empty { display: none; }
+.creator-alert-avatar-help { display: block; margin-top: 5px; overflow-wrap: anywhere; }
 #creator-platform-avatars { grid-column: 1 / -1; }
 #creator-platform-avatar-fields { row-gap: 16px; margin: 0; }
-.creator-platform-avatar-label { display: flex; align-items: center; gap: 8px; min-height: 24px; }
-.creator-platform-avatar-label img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; }
-#creator-alert-library .embed-field-control { display: block; }
-#creator-alert-library .embed-field-control > :is(input, select) { margin: 0; }
+.creator-platform-avatar-label { display: inline-flex; align-items: center; gap: 8px; }
+.creator-platform-avatar-label img { width: 16px; height: 16px; border-radius: 50%; object-fit: cover; }
+.creator-platform-color { margin-top: 8px; }
+.creator-platform-color .embed-accent-row { flex-wrap: wrap; }
 #creator-alert-fields .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 #creator-alert-preview-status:not(:empty):has(+ #creator-alert-preview-author:not(.hidden)) { margin-bottom: 8px; }
 #creator-alert-preview-status:empty { display: none; }
 #creator-alert-preview-author:not(.hidden) { margin-bottom: 8px; }
 .embed-field .form-grid { align-items: start; }
-#embed-composer .embed-composer-field { padding: 0; border: 0; }
-#embed-composer .embed-composer-field legend { padding: 0; margin-bottom: .75rem; }
 #embed-composer .embed-composer-field .form-grid { grid-template-columns: minmax(0, 1fr); }
 #embed-composer .embed-composer-field textarea,
 #embed-v2-edit-fields textarea { display: block; width: 100%; height: auto; resize: vertical; text-transform: none; }
@@ -2696,27 +2691,40 @@ textarea { scrollbar-width: none; }
 .embed-accent-control { display: grid; justify-items: start; align-content: start; gap: 8px; }
 .embed-accent-row { display: flex; align-items: center; gap: 8px; max-width: 100%; }
 .embed-accent-row > .switch { flex: none; }
-#embed-color { width: 8rem; min-width: 0; margin: 0; }
-#embed-color:disabled { opacity: .5; }
+.card input.embed-accent-color { width: 8rem; min-width: 0; margin: 0; }
+.embed-accent-color:disabled { opacity: .5; }
 
 :is(#tools, #creator-alerts):not(.hidden) {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  grid-template-areas: "library library" "editor preview";
   gap: 16px;
   align-items: start;
 }
 .embed-library {
-  grid-column: 1 / -1;
+  grid-area: library;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px 16px;
 }
-.embed-library > button { grid-area: 2 / 1; align-self: center; justify-self: start; }
+.embed-library > button {
+  grid-area: 2 / 1;
+  align-self: center;
+  justify-self: start;
+  inline-size: 6rem;
+  white-space: nowrap;
+}
 .embed-library > label { grid-row: 1 / span 3; display: grid; grid-template-rows: subgrid; min-width: 0; }
 .embed-library > label:nth-of-type(1) { grid-column: 2; }
 .embed-library > label:nth-of-type(2) { grid-column: 3; }
-#tools .embed-library .embed-field-control { margin: 0; }
-.embed-preview-panel { min-width: 0; position: sticky; top: 16px; }
+.embed-library label > .embed-field-control {
+  display: block;
+  position: relative;
+  margin: 0;
+}
+.embed-library label > .embed-field-control > :is(input, select) { margin: 0; }
+:is(#embed-composer, #creator-alert-editor) { grid-area: editor; }
+.embed-preview-panel { grid-area: preview; min-width: 0; position: sticky; top: 16px; }
 .embed-preview-panel h2 { margin: 0 0 12px; }
 :is(#embed-preview-empty, #creator-alert-preview-status) { margin: 0; color: var(--discord-muted, #b5bac1); }
 .embed-preview {
@@ -2785,7 +2793,10 @@ textarea { scrollbar-width: none; }
 .embed-preview-image { max-width: 100%; max-height: 300px; border-radius: 4px; object-fit: contain; }
 
 @media (max-width: 1050px) {
-  :is(#tools, #creator-alerts):not(.hidden) { grid-template-columns: minmax(0, 1fr); }
+  :is(#tools, #creator-alerts):not(.hidden) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "library" "preview" "editor";
+  }
   .embed-library { grid-template-columns: minmax(0, 1fr); row-gap: 16px; }
   .embed-library > button,
   .embed-library > label:nth-of-type(n) { grid-area: auto; }

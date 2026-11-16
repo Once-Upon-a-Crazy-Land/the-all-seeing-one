@@ -6,6 +6,7 @@ Display editable text as entered, preserving uppercase and lowercase letters.
 Keep scrollbars hidden in editable text fields, including multiline fields. Keep overflow text reachable through normal editing and scrolling.
 
 Save edits to existing dashboard settings automatically. Use Done for editors that need a closing action, and finish any pending save before closing.
+Use the shared dashboard popup for save confirmations and errors. Keep these messages out of the form layout.
 
 # Bot message formatting
 

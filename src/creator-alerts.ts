@@ -1,6 +1,7 @@
 import { type Client, type Guild, PermissionFlagsBits, ChannelType, MessageFlags } from "discord.js";
 import { db } from "./db.js";
 import { composeV2Container } from "./embed-composer.js";
+import { premiumStatus } from "./premium.js";
 
 const platforms = ["youtube", "twitch", "instagram", "tiktok"] as const;
 type Platform = typeof platforms[number];
@@ -28,6 +29,10 @@ db.exec(`
     guild_id TEXT NOT NULL, platform TEXT NOT NULL, avatar TEXT NOT NULL,
     PRIMARY KEY(guild_id, platform)
   );
+  CREATE TABLE IF NOT EXISTS creator_alert_platform_colors (
+    guild_id TEXT NOT NULL, platform TEXT NOT NULL, color TEXT NOT NULL,
+    PRIMARY KEY(guild_id, platform)
+  );
   CREATE TABLE IF NOT EXISTS creator_alert_tiktok (
     account TEXT PRIMARY KEY, access TEXT NOT NULL, refresh TEXT NOT NULL, expires INTEGER NOT NULL
   );
@@ -39,11 +44,11 @@ if (!db.prepare("PRAGMA table_info(creator_alerts)").all().some(column => column
 }
 
 const labels: Record<Platform, string> = { youtube: "YouTube", twitch: "Twitch", instagram: "Instagram", tiktok: "TikTok" };
-const platformColors: Record<Platform, number> = {
-  youtube: 0xff0000,
-  twitch: 0x9146ff,
-  instagram: 0xe1306c,
-  tiktok: 0x25f4ee
+export const creatorPlatformColorDefaults: Record<Platform, string> = {
+  youtube: "#ff0000",
+  twitch: "#9146ff",
+  instagram: "#e1306c",
+  tiktok: "#25f4ee"
 };
 
 function credential(name: string, platform: Platform) {
@@ -211,6 +216,27 @@ export function listCreatorPlatformAvatars(guildId: string) {
   return Object.fromEntries(rows.map(({ platform, avatar }) => [platform, avatar]));
 }
 
+export function listCreatorPlatformColors(guildId: string) {
+  const rows = db.prepare("SELECT platform, color FROM creator_alert_platform_colors WHERE guild_id = ? AND color <> ''")
+    .all(guildId) as { platform: Platform; color: string }[];
+  return Object.fromEntries(rows.map(({ platform, color }) => [platform, color]));
+}
+
+export function saveCreatorPlatformColor(guildId: string, platform: string, value: unknown) {
+  if (!platforms.includes(platform as Platform)) throw new Error("Choose a platform.");
+  if (value !== null && (typeof value !== "string" || !/^#[0-9a-f]{6}$/i.test(value))) {
+    throw new Error("Choose a valid embed color.");
+  }
+  const color = value?.toLowerCase() ?? null;
+  if (color === null) {
+    db.prepare("DELETE FROM creator_alert_platform_colors WHERE guild_id = ? AND platform = ?").run(guildId, platform);
+  } else {
+    db.prepare(`INSERT INTO creator_alert_platform_colors (guild_id, platform, color) VALUES (?, ?, ?)
+      ON CONFLICT(guild_id, platform) DO UPDATE SET color = excluded.color`).run(guildId, platform, color);
+  }
+  return color;
+}
+
 export function saveCreatorPlatformAvatar(guildId: string, platform: string, value: unknown) {
   if (!platforms.includes(platform as Platform)) throw new Error("Choose a platform.");
   if (typeof value !== "string") throw new Error("Enter an HTTPS avatar URL or upload an image.");
@@ -283,6 +309,12 @@ export async function saveCreatorAlert(guild: Guild, body: Record<string, unknow
   const avatar = validateCreatorAvatar(typeof body.avatar === "string" ? body.avatar : "");
   const previous = id === undefined ? undefined : db.prepare("SELECT * FROM creator_alerts WHERE guild_id = ? AND id = ?").get(guild.id, id) as Alert | undefined;
   if (id !== undefined && !previous) throw new Error("This alert no longer exists.");
+  const limitError = (limit: number) => new Error(`This server has reached its limit of ${limit} Creator Alerts. Remove alerts until you are below the limit.`);
+  if (!previous) {
+    const { creatorAlertLimit } = premiumStatus(guild.id);
+    const { count } = db.prepare("SELECT COUNT(*) AS count FROM creator_alerts WHERE guild_id = ?").get(guild.id) as { count: number };
+    if (count >= creatorAlertLimit) throw limitError(creatorAlertLimit);
+  }
   await destination(guild, channelId, local);
   const sourceChanged = !previous || previous.platform !== platform || previous.account !== account;
   if (!local && sourceChanged) await posts(platform, account, true);
@@ -290,8 +322,12 @@ export async function saveCreatorAlert(guild: Guild, body: Record<string, unknow
     .get(guild.id, platform, account, channelId);
   if (duplicate && duplicate.id !== id) throw new Error("This account is already tracked in that channel.");
   if (!previous) {
-    db.prepare(`INSERT INTO creator_alerts (guild_id, platform, account, profile, channel_id, message, name, avatar, started)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(guild.id, platform, account, profile, channelId, message, name, avatar, Date.now());
+    const { creatorAlertLimit } = premiumStatus(guild.id);
+    const result = db.prepare(`INSERT INTO creator_alerts (guild_id, platform, account, profile, channel_id, message, name, avatar, started)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE (SELECT COUNT(*) FROM creator_alerts WHERE guild_id = ?) < ?`)
+      .run(guild.id, platform, account, profile, channelId, message, name, avatar, Date.now(), guild.id, creatorAlertLimit);
+    if (!result.changes) throw limitError(creatorAlertLimit);
     return;
   }
   const updated = db.prepare(`UPDATE creator_alerts SET platform = ?, account = ?, profile = ?, channel_id = ?, message = ?, name = ?, avatar = ?, started = ?, error = ''
@@ -315,6 +351,9 @@ async function removeWebhook(client: Client, id: string) {
 
 function creatorAlertEmbed(alert: Alert, post: Post) {
   const platform = labels[alert.platform];
+  const custom = db.prepare("SELECT color FROM creator_alert_platform_colors WHERE guild_id = ? AND platform = ?")
+    .get(alert.guild_id, alert.platform) as { color: string } | undefined;
+  const color = Number.parseInt((custom?.color || creatorPlatformColorDefaults[alert.platform]).slice(1), 16);
   const template = alert.message.replace(/\r\n/g, "\n");
   const defaultHeading = template === "{account} posted on {platform}!\n{title}\n{url}"
     ? `${alert.account} posted on ${platform}`
@@ -330,7 +369,7 @@ function creatorAlertEmbed(alert: Alert, post: Post) {
   return {
     title: defaultHeading ?? (alert.platform === "twitch" ? "Twitch stream" : `${platform} post`),
     url: post.url,
-    color: platformColors[alert.platform],
+    color,
     ...(description ? { description } : {}),
     ...(previewUrl && /^https?:\/\//i.test(previewUrl) ? { image: { url: previewUrl } } : {})
   };

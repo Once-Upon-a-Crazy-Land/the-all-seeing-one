@@ -20,7 +20,7 @@ import { canSendWelcome, renderGuildMemberCard, setMemberCardChannel, memberCard
 import { renderMemberCard } from "./level-card.js";
 import { canSetAutoRole, listAutoRoles, maxAutoRoleHours, saveAutoRole } from "./auto-roles.js";
 
-import { deleteCreatorAlert, listCreatorAlerts, listCreatorPlatformAvatars, previewCreatorAlert, saveCreatorAlert, saveCreatorPlatformAvatar, startCreatorAlerts } from "./creator-alerts.js";
+import { creatorPlatformColorDefaults, deleteCreatorAlert, listCreatorAlerts, listCreatorPlatformAvatars, listCreatorPlatformColors, previewCreatorAlert, saveCreatorAlert, saveCreatorPlatformAvatar, saveCreatorPlatformColor, startCreatorAlerts } from "./creator-alerts.js";
 
 const app = express();
 if (config.redirectUri.startsWith("https://")) app.set("trust proxy", 1);
@@ -28,7 +28,7 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json());
 app.use(cookieSession({ name: "crazyland", keys: [config.sessionSecret], httpOnly: true, sameSite: "lax", secure: config.redirectUri.startsWith("https://"), maxAge: 7 * 864e5 }));
 app.get("/dashboard.html", (req, res) => res.redirect("/manage" + req.originalUrl.slice(req.path.length)));
-app.get(["/manage", /^\/manage\/\d{17,20}\/modules\/(levels|economy|moderation|tools|creator-alerts|premium)\/?$/], (req, res) => {
+app.get(["/manage", /^\/manage\/\d{17,20}\/modules\/(?:levels|economy|moderation|premium|creator-alerts|tools(?:\/(?:embeds|welcome|auto-roles|creator-alerts))?)\/?$/], (req, res) => {
   if (!req.session?.user) {
     req.session!.dashboardReturn = req.originalUrl;
     return authorizeDiscord(req, res, false);
@@ -181,7 +181,22 @@ app.get(creatorAlertsPath, requireUser, canManage, (req, res) => {
     .filter(channel => channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement)
     .sort((a, b) => a.rawPosition - b.rawPosition)
     .map(({ id, name }) => ({ id, name }));
-  res.json({ channels, alerts: listCreatorAlerts(guild.id), platformAvatars: listCreatorPlatformAvatars(guild.id) });
+  res.json({
+    channels, alerts: listCreatorAlerts(guild.id), platformAvatars: listCreatorPlatformAvatars(guild.id),
+    platformColors: listCreatorPlatformColors(guild.id), platformColorDefaults: creatorPlatformColorDefaults,
+    limit: premiumStatus(guild.id).creatorAlertLimit,
+  });
+});
+
+app.put(creatorAlertsPath + "/platform-colors/:platform", requireUser, canManage, (req, res) => {
+  if (req.headers.origin !== paymentOrigin || !req.is("application/json")) return res.status(403).json({ error: "Invalid request" });
+  try {
+    const color = saveCreatorPlatformColor(String(req.params.guildId), String(req.params.platform), req.body?.color);
+    res.json({ color });
+  } catch (error) {
+    const message = error instanceof Error && !("code" in error) ? error.message : "Could not save this color.";
+    res.status(400).json({ error: message });
+  }
 });
 
 app.put(creatorAlertsPath + "/platform-avatars/:platform", requireUser, canManage, (req, res) => {
@@ -202,7 +217,7 @@ const writeCreatorAlert = async (req: Request, res: Response) => {
   if (id !== undefined && (!Number.isSafeInteger(id) || id < 1)) return res.status(400).json({ error: "Invalid alert." });
   try {
     await saveCreatorAlert(guild, req.body ?? {}, false, id);
-    res.json({ alerts: listCreatorAlerts(guild.id) });
+    res.json({ alerts: listCreatorAlerts(guild.id), limit: premiumStatus(guild.id).creatorAlertLimit });
   } catch (error) {
     const message = error instanceof Error && !("code" in error) ? error.message : "Could not save this alert.";
     res.status(400).json({ error: message });
@@ -215,7 +230,7 @@ app.delete(creatorAlertsPath + "/:id", requireUser, canManage, (req, res) => {
   const guildId = String(req.params.guildId);
   const id = Number(req.params.id);
   if (!Number.isSafeInteger(id) || !deleteCreatorAlert(guildId, id)) return res.status(404).json({ error: "Alert not found." });
-  res.json({ alerts: listCreatorAlerts(guildId) });
+  res.json({ alerts: listCreatorAlerts(guildId), limit: premiumStatus(guildId).creatorAlertLimit });
 });
 
 const autoRolesPath = "/api/guilds/:guildId/tools/auto-roles";

@@ -34,7 +34,7 @@ function approvalUrlPattern() {
 
 export function premiumStatus(guildId: string) {
   const active=!!db.prepare("SELECT 1 FROM premium_subscriptions WHERE guild_id=? AND approval_url LIKE ? AND status='ACTIVE' AND valid_until>? LIMIT 1").get(guildId,approvalUrlPattern(),Date.now());
-  return { active, systemLimit: active ? 10 : 2, shopItemLimit: active ? 100 : 20, checkoutAvailable: checkoutAvailable() };
+  return { active, systemLimit: active ? 10 : 2, shopItemLimit: active ? 100 : 20, creatorAlertLimit: active ? 30 : 5, checkoutAvailable: checkoutAvailable() };
 }
 
 class PayPalHttpError extends Error {
