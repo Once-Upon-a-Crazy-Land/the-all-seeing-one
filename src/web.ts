@@ -20,7 +20,7 @@ import { canSendWelcome, renderGuildMemberCard, setMemberCardChannel, memberCard
 import { renderMemberCard } from "./level-card.js";
 import { canSetAutoRole, listAutoRoles, maxAutoRoleHours, saveAutoRole } from "./auto-roles.js";
 
-import { deleteCreatorAlert, listCreatorAlerts, previewCreatorAlert, saveCreatorAlert, startCreatorAlerts } from "./creator-alerts.js";
+import { deleteCreatorAlert, listCreatorAlerts, listCreatorPlatformAvatars, previewCreatorAlert, saveCreatorAlert, saveCreatorPlatformAvatar, startCreatorAlerts } from "./creator-alerts.js";
 
 const app = express();
 if (config.redirectUri.startsWith("https://")) app.set("trust proxy", 1);
@@ -181,7 +181,18 @@ app.get(creatorAlertsPath, requireUser, canManage, (req, res) => {
     .filter(channel => channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement)
     .sort((a, b) => a.rawPosition - b.rawPosition)
     .map(({ id, name }) => ({ id, name }));
-  res.json({ channels, alerts: listCreatorAlerts(guild.id) });
+  res.json({ channels, alerts: listCreatorAlerts(guild.id), platformAvatars: listCreatorPlatformAvatars(guild.id) });
+});
+
+app.put(creatorAlertsPath + "/platform-avatars/:platform", requireUser, canManage, (req, res) => {
+  if (req.headers.origin !== paymentOrigin || !req.is("application/json")) return res.status(403).json({ error: "Invalid request" });
+  try {
+    const avatar = saveCreatorPlatformAvatar(String(req.params.guildId), String(req.params.platform), req.body?.avatar);
+    res.json({ avatar });
+  } catch (error) {
+    const message = error instanceof Error && !("code" in error) ? error.message : "Could not save this avatar.";
+    res.status(400).json({ error: message });
+  }
 });
 
 const writeCreatorAlert = async (req: Request, res: Response) => {

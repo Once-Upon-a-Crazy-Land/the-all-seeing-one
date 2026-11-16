@@ -5,6 +5,8 @@ Use the dashboard's styled buttons and switches. Avoid browser-default button st
 Display editable text as entered, preserving uppercase and lowercase letters.
 Keep scrollbars hidden in editable text fields, including multiline fields. Keep overflow text reachable through normal editing and scrolling.
 
+Save edits to existing dashboard settings automatically. Use Done for editors that need a closing action, and finish any pending save before closing.
+
 # Bot message formatting
 
 Use bold, normal-sized headings for embedded bot messages and Components V2 containers. Place a native separator immediately after the heading in Components V2 containers, before the body. In Tools, the divider is optional for Components V2 and unavailable for regular embeds. Do not use Markdown heading prefixes.

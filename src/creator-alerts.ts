@@ -24,6 +24,10 @@ db.exec(`
     post_id TEXT NOT NULL, PRIMARY KEY(alert_id, post_id)
   );
   CREATE TABLE IF NOT EXISTS creator_alert_webhooks (id TEXT PRIMARY KEY);
+  CREATE TABLE IF NOT EXISTS creator_alert_platform_avatars (
+    guild_id TEXT NOT NULL, platform TEXT NOT NULL, avatar TEXT NOT NULL,
+    PRIMARY KEY(guild_id, platform)
+  );
   CREATE TABLE IF NOT EXISTS creator_alert_tiktok (
     account TEXT PRIMARY KEY, access TEXT NOT NULL, refresh TEXT NOT NULL, expires INTEGER NOT NULL
   );
@@ -35,6 +39,12 @@ if (!db.prepare("PRAGMA table_info(creator_alerts)").all().some(column => column
 }
 
 const labels: Record<Platform, string> = { youtube: "YouTube", twitch: "Twitch", instagram: "Instagram", tiktok: "TikTok" };
+const platformColors: Record<Platform, number> = {
+  youtube: 0xff0000,
+  twitch: 0x9146ff,
+  instagram: 0xe1306c,
+  tiktok: 0x25f4ee
+};
 
 function credential(name: string, platform: Platform) {
   const value = process.env[name];
@@ -195,6 +205,32 @@ export function listCreatorAlerts(guildId: string) {
   return db.prepare("SELECT id, platform, account, profile, channel_id, message, name, avatar, error FROM creator_alerts WHERE guild_id = ? ORDER BY id").all(guildId);
 }
 
+export function listCreatorPlatformAvatars(guildId: string) {
+  const rows = db.prepare("SELECT platform, avatar FROM creator_alert_platform_avatars WHERE guild_id = ?")
+    .all(guildId) as { platform: Platform; avatar: string }[];
+  return Object.fromEntries(rows.map(({ platform, avatar }) => [platform, avatar]));
+}
+
+export function saveCreatorPlatformAvatar(guildId: string, platform: string, value: unknown) {
+  if (!platforms.includes(platform as Platform)) throw new Error("Choose a platform.");
+  if (typeof value !== "string") throw new Error("Enter an HTTPS avatar URL or upload an image.");
+  const avatar = validateCreatorAvatar(value);
+  if (avatar) {
+    db.prepare(`INSERT INTO creator_alert_platform_avatars (guild_id, platform, avatar) VALUES (?, ?, ?)
+      ON CONFLICT(guild_id, platform) DO UPDATE SET avatar = excluded.avatar`).run(guildId, platform, avatar);
+  } else {
+    db.prepare("DELETE FROM creator_alert_platform_avatars WHERE guild_id = ? AND platform = ?").run(guildId, platform);
+  }
+  return avatar;
+}
+
+function effectiveCreatorAvatar(alert: Alert): string {
+  if (alert.avatar) return alert.avatar;
+  const fallback = db.prepare("SELECT avatar FROM creator_alert_platform_avatars WHERE guild_id = ? AND platform = ?")
+    .get(alert.guild_id, alert.platform) as { avatar: string } | undefined;
+  return fallback?.avatar ?? "";
+}
+
 export function deleteCreatorAlert(guildId: string, id: number) {
   return db.prepare("DELETE FROM creator_alerts WHERE guild_id = ? AND id = ?").run(guildId, id).changes > 0;
 }
@@ -213,20 +249,8 @@ async function destination(guild: Guild, channelId: string, local = false) {
   return channel;
 }
 
-export async function saveCreatorAlert(guild: Guild, body: Record<string, unknown>, local: boolean, id?: number) {
-  const platform = body.platform as Platform;
-  if (!platforms.includes(platform)) throw new Error("Choose a platform.");
-  const profile = typeof body.account === "string" ? body.account.trim() : "";
-  if (profile.length > 300) throw new Error("Enter a valid profile URL or handle.");
-  const account = accountName(platform, profile);
-  const channelId = typeof body.channelId === "string" ? body.channelId : "";
-  const message = typeof body.message === "string" ? body.message : "";
-  const name = typeof body.name === "string" ? body.name.trim() : "";
-  const avatar = typeof body.avatar === "string" ? body.avatar.trim() : "";
-  if (!message.trim() || message.length > 2000) throw new Error("Enter alert text between 1 and 2,000 characters.");
-  if (name.length > 80 || (name.length > 0 && name.length < 2) || /discord|clyde/i.test(name)) {
-    throw new Error("Use a webhook name between 2 and 80 characters without Discord or Clyde.");
-  }
+function validateCreatorAvatar(value: string) {
+  const avatar = value.trim();
   if (avatar.startsWith(uploadedAvatarPrefix)) {
     const encoded = avatar.slice(uploadedAvatarPrefix.length);
     const invalidImage = () => new Error("Upload a valid avatar image.");
@@ -240,6 +264,23 @@ export async function saveCreatorAlert(guild: Guild, body: Record<string, unknow
     try { url = new URL(avatar); } catch { throw new Error("Enter a valid HTTPS avatar URL."); }
     if (url.protocol !== "https:" || url.username || url.password || avatar.length > 2048) throw new Error("Enter a valid HTTPS avatar URL.");
   }
+  return avatar;
+}
+
+export async function saveCreatorAlert(guild: Guild, body: Record<string, unknown>, local: boolean, id?: number) {
+  const platform = body.platform as Platform;
+  if (!platforms.includes(platform)) throw new Error("Choose a platform.");
+  const profile = typeof body.account === "string" ? body.account.trim() : "";
+  if (profile.length > 300) throw new Error("Enter a valid profile URL or handle.");
+  const account = accountName(platform, profile);
+  const channelId = typeof body.channelId === "string" ? body.channelId : "";
+  const message = typeof body.message === "string" ? body.message : "";
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!message.trim() || message.length > 2000) throw new Error("Enter alert text between 1 and 2,000 characters.");
+  if (name.length > 80 || (name.length > 0 && name.length < 2) || /discord|clyde/i.test(name)) {
+    throw new Error("Use a webhook name between 2 and 80 characters without Discord or Clyde.");
+  }
+  const avatar = validateCreatorAvatar(typeof body.avatar === "string" ? body.avatar : "");
   const previous = id === undefined ? undefined : db.prepare("SELECT * FROM creator_alerts WHERE guild_id = ? AND id = ?").get(guild.id, id) as Alert | undefined;
   if (id !== undefined && !previous) throw new Error("This alert no longer exists.");
   await destination(guild, channelId, local);
@@ -289,6 +330,7 @@ function creatorAlertEmbed(alert: Alert, post: Post) {
   return {
     title: defaultHeading ?? (alert.platform === "twitch" ? "Twitch stream" : `${platform} post`),
     url: post.url,
+    color: platformColors[alert.platform],
     ...(description ? { description } : {}),
     ...(previewUrl && /^https?:\/\//i.test(previewUrl) ? { image: { url: previewUrl } } : {})
   };
@@ -320,7 +362,7 @@ export async function previewCreatorAlert(guildId: string, id: number, local: bo
   return {
     message: creatorAlertEmbed(alert, latest),
     name: alert.name || "Creator Alerts",
-    avatar: alert.avatar,
+    avatar: effectiveCreatorAvatar(alert),
     notice
   };
 }
@@ -329,10 +371,11 @@ async function sendAlert(guild: Guild, alert: Alert, post: Post) {
   const channel = await destination(guild, alert.channel_id);
   const current = db.prepare("SELECT * FROM creator_alerts WHERE id = ?").get(alert.id) as Alert | undefined;
   if (!current || current.started !== alert.started || current.channel_id !== alert.channel_id) return;
-  const uploadedAvatar = current.avatar.startsWith(uploadedAvatarPrefix);
+  const avatar = effectiveCreatorAvatar(current);
+  const uploadedAvatar = avatar.startsWith(uploadedAvatarPrefix);
   const webhook = await channel.createWebhook({
     name: "Crazyland Creator Alerts", reason: "Temporary creator alert webhook",
-    ...(uploadedAvatar ? { avatar: current.avatar } : {})
+    ...(uploadedAvatar ? { avatar } : {})
   });
   try {
     db.prepare("INSERT INTO creator_alert_webhooks VALUES (?)").run(webhook.id);
@@ -340,7 +383,7 @@ async function sendAlert(guild: Guild, alert: Alert, post: Post) {
       flags: MessageFlags.IsComponentsV2,
       withComponents: true,
       components: [composeV2Container(creatorAlertEmbed(current, post), true)],
-      username: current.name || "Creator Alerts", avatarURL: uploadedAvatar ? undefined : current.avatar || undefined,
+      username: current.name || "Creator Alerts", avatarURL: uploadedAvatar ? undefined : avatar || undefined,
       allowedMentions: { parse: [] }
     });
     db.prepare(`INSERT OR IGNORE INTO creator_alert_sent (alert_id, post_id)

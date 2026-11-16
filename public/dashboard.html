@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard — Crazyland</title><link rel="icon" type="image/png" href="/images/gear.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/dashboard.css?v=creator-alert-toolbar"><link rel="stylesheet" href="/legal.css"><script src="/falling-gears.js" defer></script>
+<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard — Crazyland</title><link rel="icon" type="image/png" href="/images/gear.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/dashboard.css?v=creator-platform-avatars"><link rel="stylesheet" href="/legal.css"><script src="/falling-gears.js" defer></script>
 </head>
 <body class="app has-falling-gears">
   <div class="falling-gears" aria-hidden="true"></div>
@@ -151,18 +151,15 @@
             <label for="creator-alert-avatar-url">Webhook avatar URL</label>
             <div class="creator-alert-avatar-controls">
               <input id="creator-alert-avatar-url" name="avatar" type="url" maxlength="2048" placeholder="https://">
-              <button id="creator-alert-avatar-upload" class="button" type="button" aria-label="Upload webhook avatar" title="Upload webhook avatar">+</button>
+              <button id="creator-alert-avatar-upload" class="button" type="button" aria-label="Upload webhook avatar" title="Upload webhook avatar"><span aria-hidden="true"></span></button>
               <input id="creator-alert-avatar-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp" hidden>
             </div>
-            <div class="creator-alert-avatar-feedback">
-              <small id="creator-alert-avatar-status" role="status"></small>
-              <button id="creator-alert-avatar-remove" class="outline hidden" type="button" aria-label="Remove uploaded webhook avatar">Remove</button>
-            </div>
+            <small class="creator-alert-avatar-help">Leave blank to use the platform default.</small>
+            <small id="creator-alert-avatar-status" class="creator-alert-avatar-status" role="status"></small>
           </div>
         </div>
         <div class="actions">
           <button class="button" type="submit" id="creator-alert-save">Add account</button>
-          <button class="button hidden" type="button" id="creator-alert-cancel">Cancel</button>
           <button class="outline hidden" type="button" id="creator-alert-remove">Remove alert</button>
         </div>
       </fieldset>
@@ -175,6 +172,21 @@
     <div id="creator-alert-preview-author" class="embed-preview-meta hidden"></div>
     <div id="creator-alert-preview-message" class="embed-preview embed-preview-v2 hidden"></div>
   </aside>
+  <div id="creator-platform-avatars" class="card" aria-labelledby="creator-platform-avatars-heading">
+    <div class="cardhead"><div><h2 id="creator-platform-avatars-heading">Default webhook avatars</h2><p>Each default applies to alerts on that platform without a custom avatar.</p></div></div>
+    <div id="creator-platform-avatar-fields" class="form-grid"></div>
+    <template id="creator-platform-avatar-template">
+      <div class="creator-alert-avatar-field">
+        <div class="creator-platform-avatar-label"><label></label><img alt="" referrerpolicy="no-referrer" hidden></div>
+        <div class="creator-alert-avatar-controls">
+          <input type="url" maxlength="2048" placeholder="https://">
+          <button class="button" type="button"><span aria-hidden="true"></span></button>
+          <input type="file" accept="image/png,image/jpeg,image/webp" hidden>
+        </div>
+        <small class="creator-alert-avatar-status" role="status"></small>
+      </div>
+    </template>
+  </div>
 </section>
 <section id="tools-auto-roles" class="panel hidden" aria-labelledby="auto-roles-heading">
   <div id="auto-roles-card" class="card">
@@ -280,4 +292,4 @@
     </div>
   </fieldset>
 </template>
-<nav class="legal-links dashboard-legal" aria-label="Legal"><a href="/privacy.html" target="_blank" rel="noopener">Privacy Policy</a><a href="/terms.html" target="_blank" rel="noopener">Terms of Service</a></nav></main><div id="system-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="system-modal-title"><button class="modal-backdrop" aria-label="Close"></button><div class="modal-card"><div class="modal-head"><div><small>LEVELING SYSTEM</small><h2 id="system-modal-title">System settings</h2></div><button id="close-system-modal" class="modal-close" aria-label="Close">×</button></div><label>System name<input id="modal-system-name" maxlength="50"></label><div class="modal-toggle"><div><b>System enabled</b><small>Members can earn XP in this system.</small></div><label class="switch"><input id="modal-system-enabled" type="checkbox"><span></span></label></div><div class="template-zone"><div><b>Use another system as template</b><small>Copies settings and rewards without copying member XP.</small></div><div class="template-controls"><div class="template-select-wrap"><select id="template-system"></select><span id="template-placeholder">No system selected</span></div><button id="apply-template" disabled>Apply template</button></div><p class="template-warning hidden">Applying replaces this system's settings, access rules, announcements, and role rewards. Member XP is kept.</p></div><div class="danger-zone"><div><b>Delete leveling system</b><small>This permanently removes its XP and settings.</small></div><button id="modal-delete-system">Delete system</button></div></div></div><script src="/dashboard.js?v=creator-alert-toolbar"></script></body></html>
+<nav class="legal-links dashboard-legal" aria-label="Legal"><a href="/privacy.html" target="_blank" rel="noopener">Privacy Policy</a><a href="/terms.html" target="_blank" rel="noopener">Terms of Service</a></nav></main><div id="system-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="system-modal-title"><button class="modal-backdrop" aria-label="Close"></button><div class="modal-card"><div class="modal-head"><div><small>LEVELING SYSTEM</small><h2 id="system-modal-title">System settings</h2></div><button id="close-system-modal" class="modal-close" aria-label="Close">×</button></div><label>System name<input id="modal-system-name" maxlength="50"></label><div class="modal-toggle"><div><b>System enabled</b><small>Members can earn XP in this system.</small></div><label class="switch"><input id="modal-system-enabled" type="checkbox"><span></span></label></div><div class="template-zone"><div><b>Use another system as template</b><small>Copies settings and rewards without copying member XP.</small></div><div class="template-controls"><div class="template-select-wrap"><select id="template-system"></select><span id="template-placeholder">No system selected</span></div><button id="apply-template" disabled>Apply template</button></div><p class="template-warning hidden">Applying replaces this system's settings, access rules, announcements, and role rewards. Member XP is kept.</p></div><div class="danger-zone"><div><b>Delete leveling system</b><small>This permanently removes its XP and settings.</small></div><button id="modal-delete-system">Delete system</button></div></div></div><script src="/dashboard.js?v=creator-platform-avatars"></script></body></html>

@@ -127,6 +127,7 @@ function rewardRow(level=10,roleId=''){const options=state.data.roles.map(r=>`<o
 function showTab(name){document.querySelectorAll('.panel').forEach(p=>p.classList.add('hidden'));document.querySelectorAll('#level-tabs .level-tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));$('#'+name).classList.remove('hidden');$('#title').textContent=name==='overview'?'Levels overview':name==='leveling'?'Leveling settings':'Role rewards';$('#crumb').textContent='DASHBOARD / LEVELS / '+name.toUpperCase()}
 function showSection(section){
   if(section!=='moderation')flushModerationSave();
+  if(section!=='creator-alerts')void flushCreatorAlertSettings();
   const economy=section==='economy',levels=section==='levels';
   document.querySelectorAll('.tab').forEach(tab=>tab.classList.toggle('active',tab.dataset.section===section));
   $('#level-tabs').classList.toggle('hidden',!levels);
@@ -144,7 +145,7 @@ function showSection(section){
     $('#creator-alerts').classList.remove('hidden');
     $('#title').textContent='Creator Alerts';
     $('#crumb').textContent='DASHBOARD / CREATOR ALERTS';
-    return loadCreatorAlerts();
+    if (creatorAlertView?.guildId !== state.guildId || !creatorAlertView.channels) return loadCreatorAlerts();
   }
   else if(section==='moderation'){$('#moderation').classList.remove('hidden');showModerationPage(document.querySelector('.moderation-child.active')?.dataset.moderationPage||'overview');return loadModeration()}
 }
@@ -175,15 +176,13 @@ const creatorAlertSaved = $('#creator-alert-saved');
 const creatorAlertNew = $('#creator-alert-new');
 const creatorAlertAccount = $('#creator-alert-account');
 const creatorAlertRemove = $('#creator-alert-remove');
+const creatorAlertSave = $('#creator-alert-save');
 const creatorAlertSavedHelp = $('#creator-alert-saved-help');
 const creatorAlertStatus = $('#creator-alert-status');
 const creatorPreviewStatus = $('#creator-alert-preview-status');
 const creatorPreviewAuthor = $('#creator-alert-preview-author');
 const creatorPreviewMessage = $('#creator-alert-preview-message');
-const creatorAvatarFile = $('#creator-alert-avatar-file');
-const creatorAvatarStatus = $('#creator-alert-avatar-status');
-const creatorAvatarRemove = $('#creator-alert-avatar-remove');
-const creatorAvatarUrl = $('#creator-alert-avatar-url');
+const creatorPlatformAvatarFields = $('#creator-platform-avatar-fields');
 const creatorAvatarPrefix = 'data:image/png;base64,';
 const creatorAlertLabels = { youtube: 'YouTube', twitch: 'Twitch', instagram: 'Instagram', tiktok: 'TikTok' };
 const creatorAlertHelp = {
@@ -194,8 +193,9 @@ const creatorAlertHelp = {
 };
 let creatorAlertView;
 let editingCreatorAlert;
-let creatorUploadedAvatar = '';
-let creatorAvatarSelection = 0;
+let creatorAlertSaveTimer;
+let creatorAlertSaveRequest;
+let savedCreatorAlertBody;
 const creatorPostText = '{account} posted on {platform}!\n{title}\n{url}';
 const creatorLiveText = '{account} is live on {platform}!\n{title}\n{url}';
 
@@ -203,14 +203,86 @@ function updateCreatorPlatformHelp() {
   $('#creator-alert-platform-help').textContent = creatorAlertHelp[creatorAlertForm.elements.platform.value];
 }
 
-function setCreatorUploadedAvatar(image = '') {
-  creatorAvatarSelection++;
-  creatorUploadedAvatar = image;
-  creatorAvatarFile.value = '';
-  creatorAvatarStatus.textContent = image ? 'Image uploaded' : '';
-  creatorAvatarRemove.classList.toggle('hidden', !image);
-  $('#creator-alert-save').disabled = false;
+function bindCreatorAvatar(field, label, onEdit, setPreparing = () => {}) {
+  const url = field.querySelector('input[type="url"]');
+  const file = field.querySelector('input[type="file"]');
+  const button = field.querySelector('button');
+  const status = field.querySelector('.creator-alert-avatar-status');
+  let uploaded = '';
+  let selection = 0;
+  let preparation;
+
+  function setUploaded(image = '') {
+    selection++;
+    uploaded = image;
+    file.value = '';
+    status.textContent = '';
+    button.classList.toggle('has-avatar', Boolean(image));
+    const action = image ? 'Remove uploaded ' : 'Upload ';
+    button.setAttribute('aria-label', action + label);
+    button.title = action + label;
+    setPreparing(false);
+  }
+
+  button.onclick = () => {
+    if (!uploaded) return file.click();
+    setUploaded();
+    onEdit();
+  };
+  url.oninput = () => {
+    setUploaded();
+    onEdit();
+  };
+  file.onchange = () => {
+    const image = file.files[0];
+    if (!image) return;
+    const current = ++selection;
+    setPreparing(true);
+    status.textContent = 'Preparing image...';
+    preparation = prepareCreatorAvatar(image).then(data => {
+      if (current !== selection) return;
+      url.value = '';
+      setUploaded(data);
+      onEdit();
+    }).catch(error => {
+      if (current !== selection) return;
+      status.textContent = error.message;
+      file.value = '';
+      setPreparing(false);
+    });
+  };
+
+  return {
+    url,
+    status,
+    get value() { return uploaded || url.value.trim(); },
+    get preparation() { return preparation; },
+    setValue(avatar = '') {
+      const isUpload = avatar.startsWith(creatorAvatarPrefix);
+      url.value = isUpload ? '' : avatar;
+      setUploaded(isUpload ? avatar : '');
+    }
+  };
 }
+
+async function prepareCreatorAvatar(file) {
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
+    throw new Error('Choose a PNG, JPG, or WebP image up to 10 MB.');
+  }
+  const bitmap = await createImageBitmap(file).catch(() => { throw new Error('This image could not be opened.'); });
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 128;
+    const side = Math.min(bitmap.width, bitmap.height);
+    canvas.getContext('2d').drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 128, 128);
+    return canvas.toDataURL('image/png');
+  } finally {
+    bitmap.close();
+  }
+}
+
+const creatorAlertAvatar = bindCreatorAvatar($('#creator-alert-avatar-url').closest('.creator-alert-avatar-field'),
+  'webhook avatar', scheduleCreatorAlertSave, preparing => { creatorAlertSave.disabled = preparing; });
 
 function editCreatorAlert(alert) {
   editingCreatorAlert = alert?.id;
@@ -220,13 +292,10 @@ function editCreatorAlert(alert) {
   fields.channelId.value = alert?.channel_id || '';
   fields.message.value = alert?.message || creatorPostText;
   fields.name.value = alert?.name || '';
-  const avatar = alert?.avatar || '';
-  const uploaded = avatar.startsWith(creatorAvatarPrefix);
-  fields.avatar.value = uploaded ? '' : avatar;
-  setCreatorUploadedAvatar(uploaded ? avatar : '');
+  creatorAlertAvatar.setValue(alert?.avatar);
   $('#creator-alert-editor-heading').textContent = alert ? 'Edit account' : 'Add an account';
-  $('#creator-alert-save').textContent = alert ? 'Save changes' : 'Add account';
-  $('#creator-alert-cancel').classList.toggle('hidden', !alert);
+  creatorAlertSave.textContent = alert ? 'Done' : 'Add account';
+  savedCreatorAlertBody = alert ? JSON.stringify(getCreatorAlertBody()) : undefined;
   creatorAlertRemove.classList.toggle('hidden', !alert);
   updateCreatorPlatformHelp();
 }
@@ -270,6 +339,9 @@ async function showCreatorAlertPreview(view, id) {
     }
     const divider = document.createElement('hr');
     divider.className = 'embed-preview-divider';
+    creatorPreviewMessage.style.borderInlineStartColor = Number.isInteger(message.color)
+      ? '#' + message.color.toString(16).padStart(6, '0')
+      : '';
     creatorPreviewMessage.replaceChildren(title, divider);
     if (message.description) {
       const body = document.createElement('div');
@@ -314,6 +386,90 @@ function renderCreatorAlerts(view) {
   );
 }
 
+function renderCreatorPlatformAvatars(view) {
+  const template = $('#creator-platform-avatar-template');
+  view.flushPlatformAvatars = Object.entries(creatorAlertLabels).map(([platform, label]) => {
+    const field = template.content.firstElementChild.cloneNode(true);
+    const fieldLabel = field.querySelector('label');
+    const image = field.querySelector('img');
+    fieldLabel.textContent = label;
+    let saved = view.platformAvatars?.[platform] || '';
+    let timer;
+    let saving;
+    const control = bindCreatorAvatar(field, label + ' default avatar', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void flush(), 650);
+    });
+    control.url.id = 'creator-platform-avatar-' + platform;
+    control.status.id = control.url.id + '-status';
+    control.url.setAttribute('aria-describedby', control.status.id);
+    fieldLabel.htmlFor = control.url.id;
+    control.setValue(saved);
+    showImage();
+    creatorPlatformAvatarFields.append(field);
+
+    function showImage() {
+      image.hidden = !saved;
+      if (saved) image.src = saved;
+      else image.removeAttribute('src');
+    }
+
+    image.onerror = () => { image.hidden = true; };
+
+    async function flush() {
+      clearTimeout(timer);
+      while (creatorAlertView === view && state.guildId === view.guildId) {
+        if (saving) {
+          if (!(await saving)) return false;
+          continue;
+        }
+        const preparation = control.preparation;
+        if (preparation) {
+          await preparation;
+          if (control.preparation !== preparation || saving) continue;
+          if (creatorAlertView !== view || state.guildId !== view.guildId) return false;
+        }
+        const avatar = control.value;
+        if (avatar === saved) return true;
+        if (!control.url.checkValidity()) {
+          control.status.textContent = 'Enter a valid HTTPS avatar URL.';
+          return false;
+        }
+        control.status.textContent = 'Saving...';
+        const body = JSON.stringify({ avatar });
+        saving = request(`/api/guilds/${view.guildId}/creator-alerts/platform-avatars/${platform}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          keepalive: document.hidden && new Blob([body]).size < 64 * 1024,
+          body
+        }).then(data => {
+          saved = data.avatar;
+          showImage();
+          if (control.value === avatar) control.status.textContent = 'Saved.';
+          const alert = view.alerts.find(({ id }) => id === editingCreatorAlert);
+          if (alert?.platform === platform && !alert.avatar) void showCreatorAlertPreview(view, alert.id);
+          return true;
+        }).catch(error => {
+          control.status.textContent = error.message;
+          return false;
+        }).finally(() => { saving = undefined; });
+        if (!(await saving) && control.value === avatar) return false;
+      }
+      return true;
+    }
+    return flush;
+  });
+}
+
+async function flushCreatorAlertSettings(reportValidity = false) {
+  const platformSaves = creatorAlertView?.guildId === state.guildId ? creatorAlertView?.flushPlatformAvatars : undefined;
+  const results = await Promise.all([
+    flushCreatorAlertSave(reportValidity),
+    ...(platformSaves ?? []).map(flush => flush())
+  ]);
+  return results.every(Boolean);
+}
+
 function selectCreatorAlert(view, id) {
   const alert = view.alerts.find(alert => alert.id === id);
   creatorAlertSaved.value = alert ? String(alert.id) : '';
@@ -327,6 +483,7 @@ async function loadCreatorAlerts() {
   creatorAlertView?.previewRequest?.abort();
   const view = { guildId: state.guildId, alerts: [] };
   creatorAlertView = view;
+  creatorPlatformAvatarFields.replaceChildren();
   setCreatorAlertBusy(true);
   creatorAlertSaved.replaceChildren(new Option('Select a saved alert', ''));
   selectCreatorAlert(view);
@@ -341,6 +498,7 @@ async function loadCreatorAlerts() {
     );
     $('#creator-alert-preview').classList.toggle('hidden', !view.preview);
     renderCreatorAlerts(view);
+    renderCreatorPlatformAvatars(view);
     setCreatorAlertBusy(false);
     creatorAlertStatus.textContent = '';
   } catch (error) {
@@ -352,6 +510,8 @@ async function changeCreatorAlert(method, id, body) {
   const view = creatorAlertView;
   if (!view || state.guildId !== view.guildId || creatorAlertFields.disabled) return;
   setCreatorAlertBusy(true);
+  clearTimeout(creatorAlertSaveTimer);
+  await creatorAlertSaveRequest;
   creatorAlertStatus.textContent = method === 'DELETE' ? 'Removing account...' : 'Saving account...';
   try {
     const path = `/api/guilds/${view.guildId}/creator-alerts` + (id ? '/' + id : '');
@@ -361,7 +521,7 @@ async function changeCreatorAlert(method, id, body) {
     if (creatorAlertView !== view || state.guildId !== view.guildId) return;
     view.alerts = data.alerts;
     renderCreatorAlerts(view);
-    selectCreatorAlert(view, method === 'PUT' ? id : undefined);
+    selectCreatorAlert(view);
     creatorAlertStatus.textContent = method === 'DELETE' ? 'Account removed.' : 'Account saved.';
   } catch (error) {
     if (creatorAlertView === view && state.guildId === view.guildId) creatorAlertStatus.textContent = error.message;
@@ -372,65 +532,103 @@ async function changeCreatorAlert(method, id, body) {
   }
 }
 
+function getCreatorAlertBody() {
+  const body = Object.fromEntries(new FormData(creatorAlertForm));
+  body.avatar = creatorAlertAvatar.value;
+  return body;
+}
+
+function scheduleCreatorAlertSave() {
+  if (editingCreatorAlert === undefined) return;
+  clearTimeout(creatorAlertSaveTimer);
+  creatorAlertSaveTimer = setTimeout(() => void flushCreatorAlertSave(), 650);
+}
+
+async function flushCreatorAlertSave(reportValidity = false) {
+  clearTimeout(creatorAlertSaveTimer);
+  const view = creatorAlertView;
+  const id = editingCreatorAlert;
+  if (id === undefined || view?.guildId !== state.guildId) return true;
+
+  while (creatorAlertView === view && editingCreatorAlert === id && !creatorAlertFields.disabled) {
+    if (creatorAlertSaveRequest) {
+      if (!(await creatorAlertSaveRequest)) return false;
+      continue;
+    }
+    if (creatorAlertSave.disabled) return false;
+    const body = JSON.stringify(getCreatorAlertBody());
+    if (body === savedCreatorAlertBody) {
+      if (creatorAlertStatus.textContent) creatorAlertStatus.textContent = 'Changes saved.';
+      return true;
+    }
+    const valid = reportValidity ? creatorAlertForm.reportValidity() : creatorAlertForm.checkValidity();
+    if (!valid) {
+      creatorAlertStatus.textContent = 'Complete the required fields and fix any invalid values to save changes.';
+      return false;
+    }
+
+    creatorAlertStatus.textContent = 'Saving changes...';
+    creatorAlertSaveRequest = request(`/api/guilds/${view.guildId}/creator-alerts/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      keepalive: new Blob([body]).size < 64 * 1024,
+      body
+    }).then(data => {
+      savedCreatorAlertBody = body;
+      view.alerts = data.alerts;
+      if (!creatorAlertFields.disabled && body === JSON.stringify(getCreatorAlertBody())) {
+        renderCreatorAlerts(view);
+        creatorAlertSaved.value = String(id);
+        creatorAlertSavedHelp.textContent = 'Select a saved alert to edit and preview it.';
+        creatorAlertStatus.textContent = 'Changes saved.';
+        void showCreatorAlertPreview(view, id);
+      }
+      return true;
+    }).catch(error => {
+      creatorAlertStatus.textContent = error.message;
+      return false;
+    }).finally(() => { creatorAlertSaveRequest = undefined; });
+    if (!(await creatorAlertSaveRequest) && body === JSON.stringify(getCreatorAlertBody())) return false;
+  }
+  return false;
+}
+
+async function finishCreatorAlertEdit(id) {
+  const view = creatorAlertView;
+  const previous = editingCreatorAlert;
+  creatorAlertSaved.value = previous === undefined ? '' : String(previous);
+  if (!(await flushCreatorAlertSave(true))) return;
+  if (creatorAlertView === view && editingCreatorAlert === previous) selectCreatorAlert(view, id);
+}
+
 creatorAlertForm.elements.platform.onchange = () => {
   const { platform, message } = creatorAlertForm.elements;
   if (message.value === creatorPostText || message.value === creatorLiveText) {
     message.value = platform.value === 'twitch' ? creatorLiveText : creatorPostText;
   }
   updateCreatorPlatformHelp();
+  scheduleCreatorAlertSave();
 };
-creatorAlertSaved.onchange = () => selectCreatorAlert(creatorAlertView, Number(creatorAlertSaved.value));
-creatorAlertNew.onclick = () => {
-  selectCreatorAlert(creatorAlertView);
-  creatorAlertAccount.focus();
+creatorAlertForm.addEventListener('input', scheduleCreatorAlertSave);
+creatorAlertForm.elements.channelId.onchange = scheduleCreatorAlertSave;
+creatorAlertAccount.oninput = scheduleCreatorAlertSave;
+creatorAlertSaved.onchange = () => void finishCreatorAlertEdit(Number(creatorAlertSaved.value));
+creatorAlertNew.onclick = async () => {
+  await finishCreatorAlertEdit();
+  if (editingCreatorAlert === undefined) creatorAlertAccount.focus();
 };
-$('#creator-alert-cancel').onclick = () => selectCreatorAlert(creatorAlertView);
 creatorAlertRemove.onclick = () => {
   if (editingCreatorAlert !== undefined) void changeCreatorAlert('DELETE', editingCreatorAlert);
 };
-$('#creator-alert-avatar-upload').onclick = () => creatorAvatarFile.click();
-creatorAvatarRemove.onclick = () => {
-  setCreatorUploadedAvatar();
-  creatorAvatarUrl.focus();
-};
-creatorAvatarUrl.oninput = () => setCreatorUploadedAvatar();
-creatorAvatarFile.onchange = async () => {
-  const file = creatorAvatarFile.files[0];
-  if (!file) return;
-  const selection = ++creatorAvatarSelection;
-  const save = $('#creator-alert-save');
-  save.disabled = true;
-  creatorAvatarStatus.textContent = 'Preparing image...';
-  try {
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
-      throw new Error('Choose a PNG, JPG, or WebP image up to 10 MB.');
-    }
-    const bitmap = await createImageBitmap(file);
-    try {
-      if (selection !== creatorAvatarSelection) return;
-      const canvas = document.createElement('canvas');
-      canvas.width = canvas.height = 128;
-      const side = Math.min(bitmap.width, bitmap.height);
-      canvas.getContext('2d').drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 128, 128);
-      creatorAvatarUrl.value = '';
-      setCreatorUploadedAvatar(canvas.toDataURL('image/png'));
-    } finally {
-      bitmap.close();
-    }
-  } catch (error) {
-    if (selection !== creatorAvatarSelection) return;
-    creatorAvatarStatus.textContent = error.name === 'Error' ? error.message : 'This image could not be opened.';
-    creatorAvatarFile.value = '';
-    save.disabled = false;
-  }
-};
 creatorAlertForm.onsubmit = event => {
   event.preventDefault();
-  if ($('#creator-alert-save').disabled) return;
-  const body = Object.fromEntries(new FormData(creatorAlertForm));
-  body.avatar = creatorUploadedAvatar || body.avatar;
-  void changeCreatorAlert(editingCreatorAlert ? 'PUT' : 'POST', editingCreatorAlert, body);
+  if (creatorAlertSave.disabled) return;
+  if (editingCreatorAlert !== undefined) void finishCreatorAlertEdit();
+  else void changeCreatorAlert('POST', undefined, getCreatorAlertBody());
 };
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) void flushCreatorAlertSettings();
+});
 
 const autoRoleAdd = $('#auto-role-add');
 const autoRoleList = $('#auto-role-list');
@@ -1365,6 +1563,7 @@ async function confirmLogout() {
     await flushSave();
     await flushEconomySave();
     await flushModerationSave();
+    if (!(await flushCreatorAlertSettings(true))) return;
     const response = await fetch('/auth/logout', { method: 'POST' });
     if (!response.ok) throw new Error('Could not log out. Please try again.');
     location.href = '/';
@@ -2252,6 +2451,7 @@ async function switchServer(guildId){
     await flushSave();
     await flushEconomySave();
     await flushModerationSave();
+    if (!(await flushCreatorAlertSettings(true))) return;
     await loadGuild(guildId);
   }catch(error){showSaveToast(error.message,true);}
   finally{serverSwitchPending=false;}
