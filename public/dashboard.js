@@ -2523,11 +2523,18 @@ async function switchServer(guildId){
   finally{serverSwitchPending=false;}
 }
 function syncServerRail(){
+  let serverName = 'Crazyland';
   document.querySelectorAll('[data-server-id]').forEach(button=>{
     const active=button.dataset.serverId===state.guildId;
     button.classList.toggle('active',active);
-    if(active)button.setAttribute('aria-current','true');else button.removeAttribute('aria-current');
+    if (active) {
+      button.setAttribute('aria-current', 'true');
+      serverName = button.title;
+    } else button.removeAttribute('aria-current');
   });
+  const heading = $('#sidebar-server-name');
+  heading.textContent = serverName;
+  heading.title = serverName;
 }
 function renderServerRail(guilds){
   const list=$('#server-rail-list');list.replaceChildren();

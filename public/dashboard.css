@@ -2191,6 +2191,7 @@ select[data-economy-key="bonusRole"] {
 }
 .sidebar .brand {
   min-height: 76px;
+  min-width: 0;
   margin: 0 -14px;
   padding: 0 22px;
   gap: 12px;
@@ -2199,6 +2200,7 @@ select[data-economy-key="bonusRole"] {
   letter-spacing: -.4px;
   color: var(--discord-text);
 }
+#sidebar-server-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar .logo {
   width: 34px;
   height: 34px;
