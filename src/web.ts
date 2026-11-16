@@ -20,13 +20,15 @@ import { canSendWelcome, renderGuildMemberCard, setMemberCardChannel, memberCard
 import { renderMemberCard } from "./level-card.js";
 import { canSetAutoRole, listAutoRoles, maxAutoRoleHours, saveAutoRole } from "./auto-roles.js";
 
+import { deleteCreatorAlert, listCreatorAlerts, saveCreatorAlert, startCreatorAlerts } from "./creator-alerts.js";
+
 const app = express();
 if (config.redirectUri.startsWith("https://")) app.set("trust proxy", 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json());
 app.use(cookieSession({ name: "crazyland", keys: [config.sessionSecret], httpOnly: true, sameSite: "lax", secure: config.redirectUri.startsWith("https://"), maxAge: 7 * 864e5 }));
 app.get("/dashboard.html", (req, res) => res.redirect("/manage" + req.originalUrl.slice(req.path.length)));
-app.get(["/manage", /^\/manage\/\d{17,20}\/modules\/(levels|economy|moderation|tools|premium)\/?$/], (req, res) => {
+app.get(["/manage", /^\/manage\/\d{17,20}\/modules\/(levels|economy|moderation|tools|creator-alerts|premium)\/?$/], (req, res) => {
   if (!req.session?.user) {
     req.session!.dashboardReturn = req.originalUrl;
     return authorizeDiscord(req, res, false);
@@ -159,6 +161,39 @@ function canManage(req: Request, res: Response, next: NextFunction) {
 }
 
 const paymentOrigin = new URL(config.redirectUri).origin;
+
+const creatorAlertsPath = "/api/guilds/:guildId/creator-alerts";
+app.get(creatorAlertsPath, requireUser, canManage, (req, res) => {
+  const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+  const channels = guild.channels.cache
+    .filter(channel => channel.type === ChannelType.GuildText || channel.type === ChannelType.GuildAnnouncement)
+    .sort((a, b) => a.rawPosition - b.rawPosition)
+    .map(({ id, name }) => ({ id, name }));
+  res.json({ channels, alerts: listCreatorAlerts(guild.id) });
+});
+
+const writeCreatorAlert = async (req: Request, res: Response) => {
+  if (req.headers.origin !== paymentOrigin || !req.is("application/json")) return res.status(403).json({ error: "Invalid request" });
+  const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+  const id = req.params.id === undefined ? undefined : Number(req.params.id);
+  if (id !== undefined && (!Number.isSafeInteger(id) || id < 1)) return res.status(400).json({ error: "Invalid alert." });
+  try {
+    await saveCreatorAlert(guild, req.body ?? {}, false, id);
+    res.json({ alerts: listCreatorAlerts(guild.id) });
+  } catch (error) {
+    const message = error instanceof Error && !("code" in error) ? error.message : "Could not save this alert.";
+    res.status(400).json({ error: message });
+  }
+};
+app.post(creatorAlertsPath, requireUser, canManage, writeCreatorAlert);
+app.put(creatorAlertsPath + "/:id", requireUser, canManage, writeCreatorAlert);
+app.delete(creatorAlertsPath + "/:id", requireUser, canManage, (req, res) => {
+  if (req.headers.origin !== paymentOrigin) return res.status(403).json({ error: "Invalid request" });
+  const guildId = String(req.params.guildId);
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || !deleteCreatorAlert(guildId, id)) return res.status(404).json({ error: "Alert not found." });
+  res.json({ alerts: listCreatorAlerts(guildId) });
+});
 
 const autoRolesPath = "/api/guilds/:guildId/tools/auto-roles";
 app.get(autoRolesPath, requireUser, canManage, async (req, res) => {
@@ -912,4 +947,4 @@ app.get("/api/guilds/:guildId/economy/leaderboard", requireUser, canManage, asyn
 
 app.use("/api", (_req, res) => res.status(404).json({ error: "This dashboard feature is unavailable on the server. Refresh and try again." }));
 app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => { console.error(error); res.status(500).json({ error: "Something went wrong" }); });
-export const startWeb = () => { startPremiumSync(); return app.listen(config.port, () => console.log(`Dashboard running at http://localhost:${config.port}`)); };
+export const startWeb = () => { startPremiumSync(); startCreatorAlerts(bot); return app.listen(config.port, () => console.log(`Dashboard running at http://localhost:${config.port}`)); };

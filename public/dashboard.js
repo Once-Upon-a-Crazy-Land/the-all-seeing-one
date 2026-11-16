@@ -140,6 +140,12 @@ function showSection(section){
   else if(levels)showTab(document.querySelector('#level-tabs .level-tab.active')?.dataset.tab||'overview');
   else if(section==='premium'){$('#premium').classList.remove('hidden');$('#title').textContent='Premium';$('#crumb').textContent='DASHBOARD / PREMIUM';renderPremium()}
   else if(section==='tools')return showToolsPage($('#tools-tabs .active')?.dataset.toolsPage||'embeds');
+  else if(section==='creator-alerts'){
+    $('#creator-alerts').classList.remove('hidden');
+    $('#title').textContent='Creator Alerts';
+    $('#crumb').textContent='DASHBOARD / CREATOR ALERTS';
+    return loadCreatorAlerts();
+  }
   else if(section==='moderation'){$('#moderation').classList.remove('hidden');showModerationPage(document.querySelector('.moderation-child.active')?.dataset.moderationPage||'overview');return loadModeration()}
 }
 
@@ -162,6 +168,146 @@ function showToolsPage(page) {
   if (welcome) loadWelcomePreview();
   return welcome ? Promise.all(memberCardLoaders.map(load => load())) : loadEmbedChannels();
 }
+
+const creatorAlertForm = $('#creator-alert-form');
+const creatorAlertFields = $('#creator-alert-fields');
+const creatorAlertList = $('#creator-alert-list');
+const creatorAlertStatus = $('#creator-alert-status');
+const creatorAlertLabels = { youtube: 'YouTube', twitch: 'Twitch', instagram: 'Instagram', tiktok: 'TikTok' };
+const creatorAlertHelp = {
+  youtube: 'Announces new uploads, including Shorts.',
+  twitch: 'Announces when a channel goes live.',
+  instagram: 'Announces new posts and Reels from eligible Business or Creator accounts.',
+  tiktok: 'Announces new videos after the creator authorizes the app.'
+};
+let creatorAlertView;
+let editingCreatorAlert;
+const creatorPostText = '{account} posted on {platform}!\n{title}\n{url}';
+const creatorLiveText = '{account} is live on {platform}!\n{title}\n{url}';
+
+function updateCreatorPlatformHelp() {
+  $('#creator-alert-platform-help').textContent = creatorAlertHelp[creatorAlertForm.elements.platform.value];
+}
+
+function editCreatorAlert(alert) {
+  editingCreatorAlert = alert?.id;
+  const fields = creatorAlertForm.elements;
+  fields.platform.value = alert?.platform || 'youtube';
+  fields.account.value = alert?.profile || '';
+  fields.channelId.value = alert?.channel_id || '';
+  fields.message.value = alert?.message || creatorPostText;
+  fields.name.value = alert?.name || '';
+  fields.avatar.value = alert?.avatar || '';
+  $('#creator-alert-editor-heading').textContent = alert ? 'Edit account' : 'Add an account';
+  $('#creator-alert-save').textContent = alert ? 'Save changes' : 'Add account';
+  $('#creator-alert-cancel').classList.toggle('hidden', !alert);
+  updateCreatorPlatformHelp();
+}
+
+function renderCreatorAlerts(view) {
+  creatorAlertList.replaceChildren();
+  if (!view.alerts.length) {
+    const empty = document.createElement('p');
+    empty.className = 'empty compact';
+    empty.textContent = 'No accounts tracked yet.';
+    creatorAlertList.append(empty);
+  }
+  for (const alert of view.alerts) {
+    const row = document.createElement('div');
+    row.className = 'creator-alert-row';
+    const details = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = creatorAlertLabels[alert.platform] + ' · ' + alert.account;
+    const channel = view.channels.find(channel => channel.id === alert.channel_id);
+    const summary = document.createElement('small');
+    summary.textContent = channel ? '#' + channel.name : 'Destination channel unavailable';
+    const actions = document.createElement('div');
+    for (const [label, action] of [
+      ['Edit', () => { editCreatorAlert(alert); creatorAlertForm.elements.account.focus(); }],
+      ['Remove', () => changeCreatorAlert('DELETE', alert.id)]
+    ]) {
+      const button = document.createElement('button');
+      button.className = 'button';
+      button.type = 'button';
+      button.textContent = label;
+      button.setAttribute('aria-label', label + ' ' + alert.account);
+      button.onclick = action;
+      actions.append(button);
+    }
+    details.append(title, summary);
+    if (alert.error) {
+      const status = document.createElement('small');
+      status.textContent = alert.error;
+      details.append(status);
+    }
+    row.append(details, actions);
+    creatorAlertList.append(row);
+  }
+}
+
+async function loadCreatorAlerts() {
+  const view = { guildId: state.guildId };
+  creatorAlertView = view;
+  creatorAlertFields.disabled = true;
+  creatorAlertList.replaceChildren();
+  $('#creator-alert-preview').classList.add('hidden');
+  creatorAlertStatus.textContent = 'Loading accounts...';
+  editCreatorAlert();
+  try {
+    const data = await request(`/api/guilds/${view.guildId}/creator-alerts`);
+    if (creatorAlertView !== view || state.guildId !== view.guildId) return;
+    Object.assign(view, data);
+    creatorAlertForm.elements.channelId.replaceChildren(
+      new Option('Select a channel', ''), ...view.channels.map(channel => new Option('#' + channel.name, channel.id))
+    );
+    $('#creator-alert-preview').classList.toggle('hidden', !view.preview);
+    renderCreatorAlerts(view);
+    creatorAlertFields.disabled = false;
+    creatorAlertStatus.textContent = '';
+  } catch (error) {
+    if (creatorAlertView === view && state.guildId === view.guildId) creatorAlertStatus.textContent = error.message;
+  }
+}
+
+async function changeCreatorAlert(method, id, body) {
+  const view = creatorAlertView;
+  if (!view || state.guildId !== view.guildId || creatorAlertFields.disabled) return;
+  creatorAlertFields.disabled = true;
+  creatorAlertList.querySelectorAll('button').forEach(button => button.disabled = true);
+  creatorAlertStatus.textContent = method === 'DELETE' ? 'Removing account...' : 'Saving account...';
+  try {
+    const path = `/api/guilds/${view.guildId}/creator-alerts` + (id ? '/' + id : '');
+    const data = await request(path, body
+      ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+      : { method });
+    if (creatorAlertView !== view || state.guildId !== view.guildId) return;
+    view.alerts = data.alerts;
+    renderCreatorAlerts(view);
+    if (method !== 'DELETE' || editingCreatorAlert === id) editCreatorAlert();
+    creatorAlertStatus.textContent = method === 'DELETE' ? 'Account removed.' : 'Account saved.';
+  } catch (error) {
+    if (creatorAlertView === view && state.guildId === view.guildId) creatorAlertStatus.textContent = error.message;
+  } finally {
+    if (creatorAlertView === view && state.guildId === view.guildId) {
+      creatorAlertFields.disabled = false;
+      creatorAlertList.querySelectorAll('button').forEach(button => button.disabled = false);
+    }
+  }
+}
+
+creatorAlertForm.elements.platform.onchange = () => {
+  const { platform, message } = creatorAlertForm.elements;
+  if (message.value === creatorPostText || message.value === creatorLiveText) {
+    message.value = platform.value === 'twitch' ? creatorLiveText : creatorPostText;
+  }
+  updateCreatorPlatformHelp();
+};
+$('#creator-alert-cancel').onclick = () => editCreatorAlert();
+creatorAlertForm.onsubmit = event => {
+  event.preventDefault();
+  const body = Object.fromEntries(new FormData(creatorAlertForm));
+  void changeCreatorAlert(editingCreatorAlert ? 'PUT' : 'POST', editingCreatorAlert, body);
+};
 
 const autoRoleAdd = $('#auto-role-add');
 const autoRoleList = $('#auto-role-list');
@@ -1901,7 +2047,7 @@ const dashboardTabs = {
 };
 
 function dashboardRoute() {
-  const match = location.pathname.match(/^\/manage\/(\d{17,20})\/modules\/([a-z]+)\/?$/);
+  const match = location.pathname.match(/^\/manage\/(\d{17,20})\/modules\/([a-z-]+)\/?$/);
   return { guildId: match?.[1], section: match?.[2] };
 }
 
