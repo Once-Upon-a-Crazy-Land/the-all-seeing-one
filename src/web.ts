@@ -20,7 +20,7 @@ import { canSendWelcome, renderGuildMemberCard, setMemberCardChannel, memberCard
 import { renderMemberCard } from "./level-card.js";
 import { canSetAutoRole, listAutoRoles, maxAutoRoleHours, saveAutoRole } from "./auto-roles.js";
 
-import { deleteCreatorAlert, listCreatorAlerts, saveCreatorAlert, startCreatorAlerts } from "./creator-alerts.js";
+import { deleteCreatorAlert, listCreatorAlerts, previewCreatorAlert, saveCreatorAlert, startCreatorAlerts } from "./creator-alerts.js";
 
 const app = express();
 if (config.redirectUri.startsWith("https://")) app.set("trust proxy", 1);
@@ -163,6 +163,18 @@ function canManage(req: Request, res: Response, next: NextFunction) {
 const paymentOrigin = new URL(config.redirectUri).origin;
 
 const creatorAlertsPath = "/api/guilds/:guildId/creator-alerts";
+app.get(creatorAlertsPath + "/:id/preview", requireUser, canManage, async (req, res, next) => {
+  const guildId = String(req.params.guildId);
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(404).json({ error: "Alert not found." });
+  try {
+    const preview = await previewCreatorAlert(guildId, id, false);
+    if (!preview) return res.status(404).json({ error: "Alert not found." });
+    res.json(preview);
+  } catch (error) {
+    next(error);
+  }
+});
 app.get(creatorAlertsPath, requireUser, canManage, (req, res) => {
   const guild = bot.guilds.cache.get(String(req.params.guildId))!;
   const channels = guild.channels.cache

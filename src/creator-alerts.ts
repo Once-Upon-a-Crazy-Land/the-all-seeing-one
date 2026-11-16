@@ -1,9 +1,12 @@
-import { type Client, type Guild, PermissionFlagsBits, ChannelType } from "discord.js";
+import { type Client, type Guild, PermissionFlagsBits, ChannelType, MessageFlags } from "discord.js";
 import { db } from "./db.js";
+import { composeV2Container } from "./embed-composer.js";
 
 const platforms = ["youtube", "twitch", "instagram", "tiktok"] as const;
 type Platform = typeof platforms[number];
-type Post = { id: string; title: string; url: string; time: number };
+type Post = { id: string; title: string; url: string; time: number; previewUrl?: string };
+type InstagramMedia = { media_type?: string; media_url?: string; thumbnail_url?: string };
+const uploadedAvatarPrefix = "data:image/png;base64,";
 type Alert = {
   id: number; guild_id: string; platform: Platform; account: string; profile: string; channel_id: string;
   message: string; name: string; avatar: string; started: number; error: string;
@@ -74,13 +77,20 @@ async function youtube(account: string): Promise<Post[]> {
   );
   const playlistId = channels.items?.[0]?.contentDetails.relatedPlaylists.uploads;
   if (!playlistId) throw new Error("YouTube channel not found.");
-  const result = await json<{ items: { snippet: { title: string }; contentDetails: { videoId: string; videoPublishedAt?: string } }[] }>(
+  const result = await json<{ items: {
+    snippet: { title: string; thumbnails?: Record<string, { url: string }> };
+    contentDetails: { videoId: string; videoPublishedAt?: string };
+  }[] }>(
     endpoint(base + "playlistItems", { part: "snippet,contentDetails", playlistId, maxResults: "50", key }), "YouTube"
   );
-  return result.items.map(({ snippet, contentDetails }) => ({
-    id: contentDetails.videoId, title: snippet.title, url: "https://www.youtube.com/watch?v=" + contentDetails.videoId,
-    time: Date.parse(contentDetails.videoPublishedAt ?? "")
-  }));
+  return result.items.map(({ snippet, contentDetails }) => {
+    const images = snippet.thumbnails;
+    return {
+      id: contentDetails.videoId, title: snippet.title, url: "https://www.youtube.com/watch?v=" + contentDetails.videoId,
+      time: Date.parse(contentDetails.videoPublishedAt ?? ""),
+      previewUrl: images?.maxres?.url ?? images?.standard?.url ?? images?.high?.url ?? images?.medium?.url ?? images?.default?.url
+    };
+  });
 }
 
 let twitchToken: { access_token: string; expires: number } | undefined;
@@ -98,26 +108,35 @@ async function twitch(account: string, verify: boolean): Promise<Post[]> {
     const users = await json<{ data: unknown[] }>(endpoint("https://api.twitch.tv/helix/users", { login: account }), "Twitch", options);
     if (!users.data.length) throw new Error("Twitch channel not found.");
   }
-  const result = await json<{ data: { id: string; title: string; started_at: string }[] }>(
+  const result = await json<{ data: { id: string; title: string; started_at: string; thumbnail_url?: string }[] }>(
     endpoint("https://api.twitch.tv/helix/streams", { user_login: account }), "Twitch", options
   );
-  return result.data.map(item => ({ id: item.id, title: item.title, url: "https://www.twitch.tv/" + account, time: Date.parse(item.started_at) }));
+  return result.data.map(item => ({
+    id: item.id, title: item.title, url: "https://www.twitch.tv/" + account, time: Date.parse(item.started_at),
+    previewUrl: item.thumbnail_url?.replace("{width}", "640").replace("{height}", "360")
+  }));
 }
 
 async function instagram(account: string): Promise<Post[]> {
   const id = credential("INSTAGRAM_ACCOUNT_ID", "instagram");
   const version = credential("INSTAGRAM_GRAPH_VERSION", "instagram");
   const token = credential("INSTAGRAM_ACCESS_TOKEN", "instagram");
-  const result = await json<{ business_discovery?: { media?: { data?: { id: string; caption?: string; permalink: string; timestamp: string }[] } } }>(
+  const result = await json<{ business_discovery?: { media?: { data?: (InstagramMedia & {
+    id: string; caption?: string; permalink: string; timestamp: string; children?: { data?: InstagramMedia[] };
+  })[] } } }>(
     endpoint(`https://graph.facebook.com/${version}/${id}`, {
-      fields: `business_discovery.username(${account}){media.limit(50){id,caption,permalink,timestamp}}`,
+      fields: `business_discovery.username(${account}){media.limit(50){id,caption,permalink,timestamp,media_type,media_url,thumbnail_url,children.limit(1){media_type,media_url,thumbnail_url}}}`,
       access_token: token
     }), "Instagram"
   );
   if (!result.business_discovery) throw new Error("Instagram professional account not found.");
-  return (result.business_discovery.media?.data ?? []).map(item => ({
-    id: item.id, title: item.caption ?? "New Instagram post", url: item.permalink, time: Date.parse(item.timestamp)
-  }));
+  return (result.business_discovery.media?.data ?? []).map(item => {
+    const cover = item.children?.data?.[0] ?? item;
+    return {
+      id: item.id, title: item.caption ?? "", url: item.permalink, time: Date.parse(item.timestamp),
+      previewUrl: cover.media_type === "VIDEO" ? cover.thumbnail_url : cover.media_url ?? item.media_url
+    };
+  });
 }
 
 const tokenRequests = new Map<string, Promise<string>>();
@@ -150,15 +169,18 @@ async function tiktok(account: string): Promise<Post[]> {
     tokenRequests.set(account, pending);
   }
   const token = await pending;
-  const result = await json<{ data?: { videos?: { id: string; title?: string; share_url: string; create_time: number }[] }; error?: { code: string } }>(
-    "https://open.tiktokapis.com/v2/video/list/?fields=id,title,share_url,create_time", "TikTok", {
+  const result = await json<{ data?: { videos?: {
+    id: string; title?: string; share_url: string; create_time: number; cover_image_url?: string;
+  }[] }; error?: { code: string } }>(
+    "https://open.tiktokapis.com/v2/video/list/?fields=id,title,share_url,create_time,cover_image_url", "TikTok", {
       method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
       body: JSON.stringify({ max_count: 20 })
     }
   );
   if (result.error?.code !== "ok" || !result.data) throw new Error("TikTok could not list this creator's videos.");
   return (result.data.videos ?? []).map(item => ({
-    id: item.id, title: item.title || "New TikTok video", url: item.share_url, time: item.create_time * 1000
+    id: item.id, title: item.title || "New TikTok video", url: item.share_url, time: item.create_time * 1000,
+    previewUrl: item.cover_image_url
   }));
 }
 
@@ -205,7 +227,15 @@ export async function saveCreatorAlert(guild: Guild, body: Record<string, unknow
   if (name.length > 80 || (name.length > 0 && name.length < 2) || /discord|clyde/i.test(name)) {
     throw new Error("Use a webhook name between 2 and 80 characters without Discord or Clyde.");
   }
-  if (avatar) {
+  if (avatar.startsWith(uploadedAvatarPrefix)) {
+    const encoded = avatar.slice(uploadedAvatarPrefix.length);
+    const invalidImage = () => new Error("Upload a valid avatar image.");
+    if (encoded.length > 90_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) throw invalidImage();
+    const png = Buffer.from(encoded, "base64");
+    if (png.length < 33 || png.toString("hex", 0, 8) !== "89504e470d0a1a0a" ||
+      png.toString("ascii", 12, 16) !== "IHDR" || png.toString("base64") !== encoded ||
+      png.readUInt32BE(16) !== 128 || png.readUInt32BE(20) !== 128) throw invalidImage();
+  } else if (avatar) {
     let url: URL;
     try { url = new URL(avatar); } catch { throw new Error("Enter a valid HTTPS avatar URL."); }
     if (url.protocol !== "https:" || url.username || url.password || avatar.length > 2048) throw new Error("Enter a valid HTTPS avatar URL.");
@@ -242,18 +272,75 @@ async function removeWebhook(client: Client, id: string) {
   db.prepare("DELETE FROM creator_alert_webhooks WHERE id = ?").run(id);
 }
 
+function creatorAlertEmbed(alert: Alert, post: Post) {
+  const platform = labels[alert.platform];
+  const template = alert.message.replace(/\r\n/g, "\n");
+  const defaultHeading = template === "{account} posted on {platform}!\n{title}\n{url}"
+    ? `${alert.account} posted on ${platform}`
+    : template === "{account} is live on {platform}!\n{title}\n{url}"
+      ? `${alert.account} is live on ${platform}`
+      : undefined;
+  const values: Record<string, string> = {
+    account: alert.account, platform, title: post.title.trim().slice(0, 500), url: post.url
+  };
+  const body = defaultHeading ? post.title : template.replace(/\{(account|platform|title|url)\}/g, (_, key: string) => values[key]);
+  const description = body.trim().slice(0, 4096).trimEnd();
+  const previewUrl = post.previewUrl;
+  return {
+    title: defaultHeading ?? (alert.platform === "twitch" ? "Twitch stream" : `${platform} post`),
+    url: post.url,
+    ...(description ? { description } : {}),
+    ...(previewUrl && /^https?:\/\//i.test(previewUrl) ? { image: { url: previewUrl } } : {})
+  };
+}
+
+export async function previewCreatorAlert(guildId: string, id: number, local: boolean) {
+  const alert = db.prepare("SELECT * FROM creator_alerts WHERE guild_id = ? AND id = ?").get(guildId, id) as Alert | undefined;
+  if (!alert) return null;
+
+  let latest: Post | undefined;
+  let notice = "";
+  if (!local) {
+    try {
+      latest = (await posts(alert.platform, alert.account)).sort((a, b) => b.time - a.time)[0];
+    } catch {
+      notice = "The latest post couldn't be loaded. Showing sample content.";
+    }
+  }
+  if (!latest) {
+    const profile = alert.platform === "youtube" && /^UC[\w-]{22}$/.test(alert.account)
+      ? "channel/" + alert.account
+      : (alert.platform === "youtube" || alert.platform === "tiktok" ? "@" : "") + alert.account;
+    latest = {
+      id: "", title: alert.platform === "twitch" ? "Example stream title" : "Example post text",
+      url: `https://www.${alert.platform === "twitch" ? "twitch.tv" : alert.platform + ".com"}/${profile}`, time: 0
+    };
+    notice ||= "Showing sample content.";
+  }
+  return {
+    message: creatorAlertEmbed(alert, latest),
+    name: alert.name || "Creator Alerts",
+    avatar: alert.avatar,
+    notice
+  };
+}
+
 async function sendAlert(guild: Guild, alert: Alert, post: Post) {
   const channel = await destination(guild, alert.channel_id);
   const current = db.prepare("SELECT * FROM creator_alerts WHERE id = ?").get(alert.id) as Alert | undefined;
   if (!current || current.started !== alert.started || current.channel_id !== alert.channel_id) return;
-  const values: Record<string, string> = { account: alert.account, platform: labels[alert.platform], title: post.title, url: post.url };
-  const content = current.message.replace(/\{(account|platform|title|url)\}/g, (_, key: string) =>
-    key === "title" ? values[key].slice(0, 500) : values[key]).slice(0, 2000);
-  const webhook = await channel.createWebhook({ name: "Crazyland Creator Alerts", reason: "Temporary creator alert webhook" });
+  const uploadedAvatar = current.avatar.startsWith(uploadedAvatarPrefix);
+  const webhook = await channel.createWebhook({
+    name: "Crazyland Creator Alerts", reason: "Temporary creator alert webhook",
+    ...(uploadedAvatar ? { avatar: current.avatar } : {})
+  });
   try {
     db.prepare("INSERT INTO creator_alert_webhooks VALUES (?)").run(webhook.id);
     await webhook.send({
-      content, username: current.name || "Creator Alerts", avatarURL: current.avatar || undefined,
+      flags: MessageFlags.IsComponentsV2,
+      withComponents: true,
+      components: [composeV2Container(creatorAlertEmbed(current, post), true)],
+      username: current.name || "Creator Alerts", avatarURL: uploadedAvatar ? undefined : current.avatar || undefined,
       allowedMentions: { parse: [] }
     });
     db.prepare(`INSERT OR IGNORE INTO creator_alert_sent (alert_id, post_id)

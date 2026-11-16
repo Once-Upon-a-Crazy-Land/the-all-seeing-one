@@ -2597,7 +2597,8 @@ select[data-economy-key="bonusRole"] {
 #auto-role-list:empty, #auto-role-status:empty { display: none; }
 #embed-composer .form-grid { margin: 0; }
 #embed-composer .form-grid > label { min-width: 0; }
-#tools label:has(.embed-field-control > :required) > .embed-field-label::after {
+:is(#tools, #creator-alert-library) label:has(.embed-field-control > :required) > .embed-field-label::after,
+#creator-alert-fields label:has(> :required) > .embed-field-label::after {
   content: "*";
   color: #f45f77;
   margin-left: .3em;
@@ -2639,13 +2640,29 @@ select[data-economy-key="bonusRole"] {
 #embed-composer .embed-accent-control label:has(:disabled) { opacity: 1; }
 .embed-field { min-width: 0; margin: 0; padding: .75rem; border: 1px solid #ffffff26; border-radius: .5rem; }
 textarea { scrollbar-width: none; }
-#creator-alert-fields { margin: 0; padding: 0; border: 0; min-width: 0; }
+#creator-alert-fields { display: grid; gap: 16px; margin: 0; padding: 0; border: 0; min-width: 0; }
+#creator-alert-fields .form-grid { margin: 0; align-items: start; }
+#creator-alert-fields .form-grid > * { min-width: 0; }
+#creator-alert-fields label { display: block; }
+#creator-alert-fields label > :is(input, select, textarea),
+.creator-alert-avatar-controls { margin-top: 8px; }
+#creator-alert-fields label > small,
+.creator-alert-avatar-feedback small { color: var(--discord-faint); font-size: 10px; line-height: 1.4; }
 #creator-alert-fields textarea { width: 100%; height: auto; resize: vertical; }
 #creator-alert-fields :is(input, textarea) { text-transform: none; }
-#creator-alert-fields .actions { margin-top: 16px; }
-.creator-alert-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; }
-.creator-alert-row small { display: block; overflow-wrap: anywhere; }
-.creator-alert-row > div:last-child { display: flex; gap: 8px; }
+.creator-alert-avatar-controls { display: grid; grid-template-columns: minmax(0, 1fr) 30px; gap: 8px; align-items: center; }
+#creator-alert-avatar-url { min-width: 0; margin: 0; }
+#creator-alert-avatar-upload { width: 30px; height: 30px; padding: 0; font-size: 18px; line-height: 1; }
+.creator-alert-avatar-feedback { display: flex; align-items: center; gap: 8px; }
+.creator-alert-avatar-feedback small { overflow-wrap: anywhere; }
+.creator-alert-avatar-feedback small:empty { display: none; }
+#creator-alert-library .embed-field-control { display: block; }
+#creator-alert-library .embed-field-control > :is(input, select) { margin: 0; }
+#creator-alert-fields .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+#creator-alert-preview-status:not(:empty):has(+ #creator-alert-preview-author:not(.hidden)) { margin-bottom: 8px; }
+#creator-alert-preview-status:empty { display: none; }
+#creator-alert-preview-author:not(.hidden) { margin-bottom: 8px; }
+#creator-alert-preview-message { border-inline-start: 0; }
 .embed-field .form-grid { align-items: start; }
 #embed-composer .embed-composer-field { padding: 0; border: 0; }
 #embed-composer .embed-composer-field legend { padding: 0; margin-bottom: .75rem; }
@@ -2667,7 +2684,7 @@ textarea { scrollbar-width: none; }
 #embed-color { width: 8rem; min-width: 0; margin: 0; }
 #embed-color:disabled { opacity: .5; }
 
-#tools:not(.hidden) {
+:is(#tools, #creator-alerts):not(.hidden) {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
   gap: 16px;
@@ -2686,7 +2703,7 @@ textarea { scrollbar-width: none; }
 #tools .embed-library .embed-field-control { margin: 0; }
 .embed-preview-panel { min-width: 0; position: sticky; top: 16px; }
 .embed-preview-panel h2 { margin: 0 0 12px; }
-#embed-preview-empty { margin: 0; color: var(--discord-muted, #b5bac1); }
+:is(#embed-preview-empty, #creator-alert-preview-status) { margin: 0; color: var(--discord-muted, #b5bac1); }
 .embed-preview {
   display: grid;
   gap: 8px;
@@ -2753,7 +2770,7 @@ textarea { scrollbar-width: none; }
 .embed-preview-image { max-width: 100%; max-height: 300px; border-radius: 4px; object-fit: contain; }
 
 @media (max-width: 1050px) {
-  #tools:not(.hidden) { grid-template-columns: minmax(0, 1fr); }
+  :is(#tools, #creator-alerts):not(.hidden) { grid-template-columns: minmax(0, 1fr); }
   .embed-library { grid-template-columns: minmax(0, 1fr); row-gap: 16px; }
   .embed-library > button,
   .embed-library > label:nth-of-type(n) { grid-area: auto; }
