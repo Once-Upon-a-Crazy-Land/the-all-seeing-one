@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard — Crazyland</title><link rel="icon" type="image/png" href="/images/gear.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/dashboard.css?v=platform-hex-fields"><link rel="stylesheet" href="/legal.css"><script src="/falling-gears.js" defer></script>
+<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard — Crazyland</title><link rel="icon" type="image/png" href="/images/gear.png"><link rel="stylesheet" href="/styles.css"><link rel="stylesheet" href="/dashboard.css?v=creator-preview-bounds"><link rel="stylesheet" href="/legal.css"><script src="/falling-gears.js" defer></script>
 </head>
 <body class="app has-falling-gears">
   <div class="falling-gears" aria-hidden="true"></div>
@@ -132,12 +132,14 @@
       <small>Enter the creator's profile link or handle.</small>
     </label>
   </div>
-  <aside id="creator-alert-message-preview" class="card embed-preview-panel" aria-labelledby="creator-alert-message-preview-heading">
-    <h2 id="creator-alert-message-preview-heading">Preview</h2>
-    <p id="creator-alert-preview-status" role="status">Select a tracked account to preview its alert.</p>
-    <div id="creator-alert-preview-author" class="embed-preview-meta hidden"></div>
-    <div id="creator-alert-preview-message" class="embed-preview embed-preview-v2 hidden"></div>
-  </aside>
+  <div class="creator-alert-preview-column">
+    <aside id="creator-alert-message-preview" class="card embed-preview-panel" aria-labelledby="creator-alert-message-preview-heading">
+      <h2 id="creator-alert-message-preview-heading">Preview</h2>
+      <p id="creator-alert-preview-status" role="status">Select a tracked account to preview its alert.</p>
+      <div id="creator-alert-preview-author" class="embed-preview-meta hidden"></div>
+      <div id="creator-alert-preview-message" class="embed-preview embed-preview-v2 hidden"></div>
+    </aside>
+  </div>
   <div id="creator-alert-editor" class="card">
     <div class="cardhead">
       <div>

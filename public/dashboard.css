@@ -2724,7 +2724,9 @@ textarea { scrollbar-width: none; }
 }
 .embed-library label > .embed-field-control > :is(input, select) { margin: 0; }
 :is(#embed-composer, #creator-alert-editor) { grid-area: editor; }
-.embed-preview-panel { grid-area: preview; min-width: 0; position: sticky; top: 16px; }
+#tools > .embed-preview-panel, .creator-alert-preview-column { grid-area: preview; }
+.creator-alert-preview-column { align-self: stretch; min-width: 0; }
+.embed-preview-panel { min-width: 0; position: sticky; top: 16px; }
 .embed-preview-panel h2 { margin: 0 0 12px; }
 :is(#embed-preview-empty, #creator-alert-preview-status) { margin: 0; color: var(--discord-muted, #b5bac1); }
 .embed-preview {
