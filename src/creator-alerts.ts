@@ -207,7 +207,15 @@ function posts(platform: Platform, account: string, verify = false) {
 }
 
 export function listCreatorAlerts(guildId: string) {
-  return db.prepare("SELECT id, platform, account, profile, channel_id, message, name, avatar, error FROM creator_alerts WHERE guild_id = ? ORDER BY id").all(guildId);
+  const { creatorAlertLimit } = premiumStatus(guildId);
+  return db.prepare("SELECT id, platform, account, profile, channel_id, message, name, avatar, error FROM creator_alerts WHERE guild_id = ? ORDER BY id")
+    .all(guildId).map((alert, index) => ({ ...alert, premiumPaused: index >= creatorAlertLimit }));
+}
+
+function creatorAlertAvailable(guildId: string, id: number) {
+  const { count } = db.prepare("SELECT COUNT(*) AS count FROM creator_alerts WHERE guild_id = ? AND id < ?")
+    .get(guildId, id) as { count: number };
+  return count < premiumStatus(guildId).creatorAlertLimit;
 }
 
 export function listCreatorPlatformAvatars(guildId: string) {
@@ -381,7 +389,7 @@ export async function previewCreatorAlert(guildId: string, id: number, local: bo
 
   let latest: Post | undefined;
   let notice = "";
-  if (!local) {
+  if (!local && creatorAlertAvailable(guildId, id)) {
     try {
       latest = (await posts(alert.platform, alert.account)).sort((a, b) => b.time - a.time)[0];
     } catch {
@@ -409,7 +417,7 @@ export async function previewCreatorAlert(guildId: string, id: number, local: bo
 async function sendAlert(guild: Guild, alert: Alert, post: Post) {
   const channel = await destination(guild, alert.channel_id);
   const current = db.prepare("SELECT * FROM creator_alerts WHERE id = ?").get(alert.id) as Alert | undefined;
-  if (!current || current.started !== alert.started || current.channel_id !== alert.channel_id) return;
+  if (!current || current.started !== alert.started || current.channel_id !== alert.channel_id || !creatorAlertAvailable(guild.id, alert.id)) return;
   const avatar = effectiveCreatorAvatar(current);
   const uploadedAvatar = avatar.startsWith(uploadedAvatarPrefix);
   const webhook = await channel.createWebhook({
@@ -418,6 +426,7 @@ async function sendAlert(guild: Guild, alert: Alert, post: Post) {
   });
   try {
     db.prepare("INSERT INTO creator_alert_webhooks VALUES (?)").run(webhook.id);
+    if (!creatorAlertAvailable(guild.id, alert.id)) return;
     await webhook.send({
       flags: MessageFlags.IsComponentsV2,
       withComponents: true,
@@ -446,7 +455,7 @@ export function startCreatorAlerts(client: Client) {
       const sources = new Map<string, Promise<Post[]>>();
       for (const alert of db.prepare("SELECT * FROM creator_alerts ORDER BY id").all() as Alert[]) {
         const guild = client.guilds.cache.get(alert.guild_id);
-        if (!guild?.available) continue;
+        if (!guild?.available || !creatorAlertAvailable(alert.guild_id, alert.id)) continue;
         try {
           const key = alert.platform + ":" + alert.account;
           let lookup = sources.get(key);

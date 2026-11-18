@@ -10,6 +10,7 @@ function required(name: string): string {
 export const config = {
   token: required("DISCORD_TOKEN"),
   clientId: required("DISCORD_CLIENT_ID"),
+  discordPremiumSkuId: process.env.DISCORD_PREMIUM_SKU_ID?.trim() ?? "",
   clientSecret: required("DISCORD_CLIENT_SECRET"),
   redirectUri: process.env.DISCORD_REDIRECT_URI ?? "http://localhost:3000/auth/discord/callback",
   sessionSecret: required("SESSION_SECRET"),

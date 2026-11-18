@@ -19,7 +19,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS auto_role_expirations_due ON auto_role_expirations(expires_at);
 `);
 
-const list = db.prepare("SELECT role_id AS roleId, MIN(hours, ?) AS hours FROM auto_roles WHERE guild_id = ?");
+const list = db.prepare("SELECT role_id AS roleId, hours FROM auto_roles WHERE guild_id = ?");
 const save = db.prepare(`INSERT INTO auto_roles VALUES (?, ?, ?)
   ON CONFLICT(guild_id, role_id) DO UPDATE SET hours = excluded.hours`);
 const remove = db.prepare("DELETE FROM auto_roles WHERE guild_id = ? AND role_id = ?");
@@ -31,8 +31,10 @@ const forget = db.prepare(`DELETE FROM auto_role_expirations
   WHERE guild_id = ? AND role_id = ? AND user_id = ? AND joined_at = ? AND expires_at = ?`);
 
 export function listAutoRoles(guildId: string) {
-  const rules = list.all(maxAutoRoleHours(guildId), guildId) as { roleId: string; hours: number | null }[];
-  return rules.filter(rule => rule.roleId !== guildId);
+  const maxHours = maxAutoRoleHours(guildId);
+  const rules = list.all(guildId) as { roleId: string; hours: number | null }[];
+  return rules.filter(rule => rule.roleId !== guildId)
+    .map(rule => ({ ...rule, premiumPaused: rule.hours !== null && rule.hours > maxHours }));
 }
 
 export function saveAutoRole(guildId: string, roleId: string, hours: number | null | undefined) {
@@ -51,7 +53,7 @@ export async function assignAutoRoles(member: GuildMember) {
   for (const { roleId, hours } of listAutoRoles(guild.id)) {
     const role = guild.roles.cache.get(roleId);
     if (!role?.editable || member.roles.cache.has(roleId)) continue;
-    if (hours !== null && joinedTimestamp === null) continue;
+    if (hours !== null && (joinedTimestamp === null || hours > maxAutoRoleHours(guild.id))) continue;
     try {
       // Track before the Discord request so a successful grant survives a restart.
       if (hours !== null) track.run(guild.id, roleId, member.id, joinedTimestamp!, Date.now() + hours * 3_600_000);

@@ -1,5 +1,5 @@
 import { sendLog } from "./log-webhooks.js";
-import { enforceShopItemLimit, systemAvailable } from "./premium.js";
+import { shopPremiumPauses, systemAvailable } from "./premium.js";
 import { AttachmentBuilder } from "discord.js";
 import { renderLeaderboardCard } from "./level-card.js";
 import { ActionRowBuilder, ButtonBuilder, ButtonInteraction, ButtonStyle, ChatInputCommandInteraction, ContainerBuilder, GuildMember, LabelBuilder, Message, MessageFlags, ModalBuilder, ModalSubmitInteraction, RepliableInteraction, SeparatorBuilder, SlashCommandBuilder, StringSelectMenuBuilder, StringSelectMenuInteraction, TextDisplayBuilder, TextInputBuilder, TextInputStyle, UserSelectMenuBuilder } from "discord.js";
@@ -16,6 +16,20 @@ const addInventory = db.prepare(`INSERT INTO economy_inventory (guild_id,user_id
 const recordTransaction = db.prepare("INSERT INTO economy_transactions (guild_id,user_id,other_user_id,action,amount,details,created_at) VALUES (?,?,?,?,?,?,?)");
 const economyEmoji = "<:crazygears:1553368966850813963>";
 const cartEmoji = "<:cart:1554529987061616720>";
+const listedShopItem = "guild_id=? AND listed=1 AND (expires_at IS NULL OR expires_at>?) AND id NOT IN (SELECT value FROM json_each(?))";
+
+function shopItemsForModal(action: "buy" | "use", guildId: string, userId: string) {
+  const pausedIds = JSON.stringify([...shopPremiumPauses(guildId).keys()]);
+  type ModalItem = { id: number; name: string; description: string; emoji_id: string | null; quantity?: number };
+  if (action === "buy") {
+    return db.prepare(`SELECT id,name,description,emoji_id FROM economy_shop_items WHERE ${listedShopItem}
+      AND (unlimited_stock=1 OR stock>0) ORDER BY name LIMIT 25`).all(guildId, new Date().toISOString(), pausedIds) as ModalItem[];
+  }
+  return db.prepare(`SELECT s.id,s.name,s.description,s.emoji_id,i.quantity
+    FROM economy_inventory i JOIN economy_shop_items s ON s.id=i.item_id
+    WHERE i.guild_id=? AND i.user_id=? AND i.quantity>0 AND s.usable=1
+    AND s.id NOT IN (SELECT value FROM json_each(?)) ORDER BY s.name LIMIT 25`).all(guildId, userId, pausedIds) as ModalItem[];
+}
 
 function meetsShopRequirements(item: ShopItem, event: "buy" | "use", guildId: string, userId: string, member: GuildMember) {
   const requirements = JSON.parse(item.requirements_json || "[]") as Array<{ type?: string; roleId?: string; itemId?: string | number; value?: string; event?: string }>;
@@ -221,7 +235,7 @@ export const economyCommands = [new SlashCommandBuilder()
     { name: "Leaderboard", value: "leaderboard" }
   ))];
 
-export function economyModal(action: string, userId: string, config: EconomyConfig = {}, guildId?: string) {
+function economyModal(action: string, userId: string, config: EconomyConfig, items: ReturnType<typeof shopItemsForModal> = []) {
   const bankName = label(config, "bankName", "Bank");
   const title = action === "deposit" ? `Deposit into ${bankName}` : action === "withdraw" ? `Withdraw from ${bankName}` : `Economy — ${action}`;
   const modal = new ModalBuilder().setCustomId(`economy:${action}:${userId}`).setTitle(title.slice(0, 45));
@@ -237,8 +251,7 @@ export function economyModal(action: string, userId: string, config: EconomyConf
       .setDescription(action === "pay" ? "Enter a whole number." : "Enter a whole number or all.")
       .setTextInputComponent(new TextInputBuilder().setCustomId("amount").setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder(action === "pay" ? "100" : "100 or all")));
   }
-  if (action === "use" && guildId) {
-    const items = db.prepare(`SELECT s.id,s.name,s.description,s.emoji_id,i.quantity FROM economy_inventory i JOIN economy_shop_items s ON s.id=i.item_id WHERE i.guild_id=? AND i.user_id=? AND i.quantity>0 AND s.usable=1 ORDER BY s.name LIMIT 25`).all(guildId, userId) as Array<{ id: number; name: string; description: string; emoji_id: string | null; quantity: number }>;
+  if (action === "use") {
     modal.addLabelComponents(new LabelBuilder()
       .setLabel("Item")
       .setDescription("Choose an item from your inventory.")
@@ -254,8 +267,7 @@ export function economyModal(action: string, userId: string, config: EconomyConf
           ...(itemSelectEmoji(item.emoji_id) ? { emoji: itemSelectEmoji(item.emoji_id) } : {})
         })))));
   }
-  if (action === "buy" && guildId) {
-    const items = db.prepare("SELECT id,name,description,emoji_id FROM economy_shop_items WHERE guild_id=? AND listed=1 AND (expires_at IS NULL OR expires_at>?) AND (unlimited_stock=1 OR stock>0) ORDER BY name LIMIT 25").all(guildId, new Date().toISOString()) as Array<{ id: number; name: string; description: string; emoji_id: string | null }>;
+  if (action === "buy") {
     modal.addLabelComponents(new LabelBuilder()
       .setLabel("Item")
       .setDescription("Choose the shop item you want to buy.")
@@ -306,7 +318,6 @@ async function auditPurchase(interaction: EconomyInteraction, item: ShopItem, pa
 }
 
 async function purchaseItem(interaction: EconomyInteraction, itemId: number, groupIndex: number) {
-  if (interaction.guildId) enforceShopItemLimit(interaction.guildId);
   const guildId = interaction.guildId!;
   const config = activeConfig(guildId);
   const respond = async (title: string, body: string, ephemeral = false) => {
@@ -322,6 +333,7 @@ async function purchaseItem(interaction: EconomyInteraction, itemId: number, gro
     await replyV2(interaction, title, body, ephemeral);
   };
   if (!enabled(config, "shopEnabled")) return respond("Shop unavailable", "The shop is disabled.", true);
+  if (shopPremiumPauses(guildId).has(itemId)) return respond("Item paused", "This item requires Server Premium.", true);
   const item = db.prepare("SELECT * FROM economy_shop_items WHERE guild_id=? AND id=? AND listed=1 AND (expires_at IS NULL OR expires_at>?)").get(guildId, itemId, new Date().toISOString()) as ShopItem | undefined;
   if (!item || (!item.unlimited_stock && item.stock < 1)) return respond("Item unavailable", "That item is unavailable.", true);
   const member = interaction.member as GuildMember;
@@ -383,11 +395,11 @@ const shopPageSize = 7;
 function shopPage(interaction: EconomyInteraction, requestedPage = 0, ownerId = interaction.user.id) {
   const guildId = interaction.guildId!;
   const now = new Date().toISOString();
-  const filter = "guild_id=? AND listed=1 AND (expires_at IS NULL OR expires_at>?)";
-  const total = (db.prepare(`SELECT COUNT(*) AS total FROM economy_shop_items WHERE ${filter}`).get(guildId, now) as { total: number }).total;
+  const pausedIds = JSON.stringify([...shopPremiumPauses(guildId).keys()]);
+  const total = (db.prepare(`SELECT COUNT(*) AS total FROM economy_shop_items WHERE ${listedShopItem}`).get(guildId, now, pausedIds) as { total: number }).total;
   const pages = Math.max(1, Math.ceil(total / shopPageSize));
   const page = Math.max(0, Math.min(pages - 1, Number.isSafeInteger(requestedPage) ? requestedPage : 0));
-  const items = db.prepare(`SELECT id,name,price,description,emoji_id,stock,unlimited_stock FROM economy_shop_items WHERE ${filter} ORDER BY id LIMIT ? OFFSET ?`).all(guildId, now, shopPageSize, page * shopPageSize) as ShopItem[];
+  const items = db.prepare(`SELECT id,name,price,description,emoji_id,stock,unlimited_stock FROM economy_shop_items WHERE ${listedShopItem} ORDER BY id LIMIT ? OFFSET ?`).all(guildId, now, pausedIds, shopPageSize, page * shopPageSize) as ShopItem[];
   const title = label(configFor(guildId), "shopName", "Server shop");
   const container = new ContainerBuilder().setAccentColor(0xf45f77)
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(`${economyEmoji} **${title}**`))
@@ -410,7 +422,6 @@ function shopPage(interaction: EconomyInteraction, requestedPage = 0, ownerId = 
 }
 
 export async function handleEconomyCommand(interaction: EconomyInteraction) {
-  if (interaction.guildId) enforceShopItemLimit(interaction.guildId);
   if (!interaction.guildId || !interaction.guild) return false;
   if (interaction.isButton()) {
     if (!interaction.customId.startsWith("economy:shop-page:")) return false;
@@ -446,21 +457,16 @@ export async function handleEconomyCommand(interaction: EconomyInteraction) {
   const name = isModal ? interaction.customId.split(":")[1] : interaction.options.getString("action", true);
   if (isModal && interaction.customId.split(":")[2] !== interaction.user.id) return false;
   if (!isModal && ["deposit", "withdraw", "pay", "buy", "use"].includes(name)) {
-    if (name === "buy") {
-      const available = db.prepare("SELECT 1 FROM economy_shop_items WHERE guild_id=? AND listed=1 AND (expires_at IS NULL OR expires_at>?) AND (unlimited_stock=1 OR stock>0) LIMIT 1").get(interaction.guildId, new Date().toISOString());
-      if (!available) {
-        await replyV2(interaction, "Shop empty", "There are no available items to buy.", true);
-        return true;
-      }
+    const items = name === "buy" || name === "use" ? shopItemsForModal(name, interaction.guildId, interaction.user.id) : undefined;
+    if (name === "buy" && !items?.length) {
+      await replyV2(interaction, "Shop empty", "There are no available items to buy.", true);
+      return true;
     }
-    if (name === "use") {
-      const available = db.prepare(`SELECT 1 FROM economy_inventory i JOIN economy_shop_items s ON s.id=i.item_id WHERE i.guild_id=? AND i.user_id=? AND i.quantity>0 AND s.usable=1 LIMIT 1`).get(interaction.guildId, interaction.user.id);
-      if (!available) {
-        await replyV2(interaction, "No usable items", "Your inventory has no items that can be used.", true);
-        return true;
-      }
+    if (name === "use" && !items?.length) {
+      await replyV2(interaction, "No usable items", "Your inventory has no items that can be used.", true);
+      return true;
     }
-    await interaction.showModal(economyModal(name, interaction.user.id, activeConfig(interaction.guildId), interaction.guildId));
+    await interaction.showModal(economyModal(name, interaction.user.id, activeConfig(interaction.guildId), items));
     return true;
   }
   const guildId = interaction.guildId;
@@ -544,6 +550,7 @@ export async function handleEconomyCommand(interaction: EconomyInteraction) {
     if (!enabled(config, "shopEnabled")) return void await replyV2(interaction, "Shop unavailable", "The shop is disabled.", true);
     const id = submittedItem;
     if (!id) return void await replyV2(interaction, "Item required", "Choose an item from the shop.", true);
+    if (shopPremiumPauses(guildId).has(id)) return void await replyV2(interaction, "Item paused", "This item requires Server Premium.", true);
     const item = db.prepare("SELECT * FROM economy_shop_items WHERE guild_id=? AND id=? AND listed=1 AND (expires_at IS NULL OR expires_at>?)").get(guildId, id, new Date().toISOString()) as ShopItem | undefined;
     if (!item || (!item.unlimited_stock && item.stock < 1)) return void await replyV2(interaction, "Item unavailable", "That item is unavailable.", true);
     const member = interaction.member as GuildMember;
@@ -582,6 +589,7 @@ export async function handleEconomyCommand(interaction: EconomyInteraction) {
   } else if (name === "use") {
     const id = submittedItem;
     if (!id) return void await replyV2(interaction, "Item required", "Choose an item from your inventory.", true);
+    if (shopPremiumPauses(guildId).has(id)) return void await replyV2(interaction, "Item paused", "This item requires Server Premium.", true);
     const item = db.prepare(`SELECT s.* FROM economy_inventory i JOIN economy_shop_items s ON s.id=i.item_id WHERE i.guild_id=? AND i.user_id=? AND i.item_id=? AND i.quantity>0 AND s.usable=1`).get(guildId, interaction.user.id, id) as ShopItem | undefined;
     if (!item) return void await replyV2(interaction, "Item unavailable", "You do not have a usable copy of that item.", true);
     const member = interaction.member as GuildMember;

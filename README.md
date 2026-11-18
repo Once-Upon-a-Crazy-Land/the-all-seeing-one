@@ -68,9 +68,17 @@ Generate a public domain under service Settings > Networking. Set `DISCORD_REDIR
 
 A new volume starts with an empty database. To retain local data, transfer the SQLite database to the volume while the bot is stopped; do not run local and hosted instances simultaneously.
 
-## PayPal premium subscriptions
+## Server Premium
 
-Free servers can create two leveling systems and two economy systems. Premium allows 10 of each per server. On cancellation, suspension, or expiry, only the first two systems of each type operate; extra system data is retained. Shop items using an unavailable economy system cannot be purchased.
+Premium raises limits for one server at a time. If the server loses Premium, features above the free limits show a red indicator and pause. Their settings and data are retained so they can resume when Premium returns.
+
+### Discord subscriptions
+
+Create a **User Subscription** SKU in Discord's Developer Portal and set `DISCORD_PREMIUM_SKU_ID` to its ID. The buyer uses the dashboard's Premium page to assign it to one server they manage and can move it by opening Premium on another eligible server. The SKU description should say that the purchase grants Premium to one server of the buyer's choice.
+
+Verify activation, moving, removing, and reactivating with a Discord user test entitlement before publishing the SKU. Removing the assignment does not cancel billing. Buyers manage billing in Discord under User Settings > Subscriptions.
+
+### PayPal subscriptions
 
 Create a PayPal REST app and an active recurring billing plan with your chosen price, currency, and interval (no trial is required). Set PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_PLAN_ID, PAYPAL_ENVIRONMENT (sandbox or live), and PAYPAL_WEBHOOK_ID. Credentials, plan, and webhook must belong to the same environment and app. Checkout remains disabled until these are configured. The actual recurring price and terms appear on PayPal before approval.
 

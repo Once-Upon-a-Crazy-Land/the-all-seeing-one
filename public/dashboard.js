@@ -91,7 +91,41 @@ document.querySelectorAll('[data-module-toggle]').forEach(toggle => {
     }
   });
 });
-function renderSystemSelect(){ renderModuleStatuses(); $('#system-select').innerHTML=state.data.systems.map(s=>`<option value="${s.id}" ${s.id===state.systemId?'selected':''}>${escapeHtml(s.name)}</option>`).join(''); $('#modal-delete-system').disabled=state.data.systems.length===1;$('#new-system').disabled=state.data.systems.length>=(state.data.premium?.systemLimit||2);$('#new-system').title=$('#new-system').disabled?`Limit of ${state.data.premium?.systemLimit||2} leveling systems reached`:''; }
+function renderSystemOptions(select, systems, selectedId, limit) {
+  select.replaceChildren(...systems.map((system, index) =>
+    new Option(system.name + (index >= limit ? ' (Paused - Premium)' : ''), system.id)
+  ));
+  select.value = String(selectedId ?? '');
+  renderSelectedSystemPause(select, systems, selectedId, limit);
+}
+
+function renderSelectedSystemPause(select, systems, selectedId, limit) {
+  const paused = systems.findIndex(system => system.id === selectedId) >= limit;
+  const label = select.closest('label');
+  let notice = label.querySelector('.premium-system-notice');
+  if (!notice) {
+    notice = document.createElement('small');
+    notice.className = 'premium-system-notice premium-pause-text hidden';
+    notice.textContent = 'Paused until this server has Premium.';
+    label.append(notice);
+  }
+  notice.classList.toggle('hidden', !paused);
+  if (select.id === 'system-select') {
+    const system = systems.find(system => system.id === selectedId);
+    $('#status').textContent = paused ? 'Premium paused' : system?.enabled ? 'Active' : 'Paused';
+  }
+}
+
+function renderSystemSelect() {
+  renderModuleStatuses();
+  const { systems, premium } = state.data;
+  const limit = premium?.systemLimit ?? 2;
+  renderSystemOptions($('#system-select'), systems, state.systemId, limit);
+  $('#modal-delete-system').disabled = systems.length === 1;
+  const add = $('#new-system');
+  add.disabled = systems.length >= limit;
+  add.title = add.disabled ? `Limit of ${limit} leveling systems reached` : '';
+}
 function updateActivityCommandFields(){const active=String(state.data?.economy?.config?.activityCommandsEnabled)==='true';for(const key of ['dailyMin','dailyMax','workMin','workMax','streakBonus']){const field=document.querySelector(`[data-economy-key="${key}"]`);if(!field)continue;field.disabled=!active;const label=field.closest('label');label.classList.toggle('activity-setting-disabled',!active);label.title=active?'':'Enable activity commands in System settings to edit this reward.'}}
 function renderEconomy(){const economy=state.data.economy||{},savedSymbol=economy.currencySymbol||'',emojiMatch=savedSymbol.match(/^<a?:[^:]+:(\d+)>$/),emoji=emojiMatch&&availableCurrencyEmojis().find(e=>e.id===emojiMatch[1]),selected=emoji||(!savedSymbol?globalEmojis[1]:null),symbol=selected?`<${selected.animated?'a':''}:${selected.name}:${selected.id}>`:savedSymbol;$('#currency-symbol').value=symbol;$('#currency-symbol').dataset.emojiId=selected?.id||'';$('#starting-balance').value=String(economy.startingBalance??0);$('#max-cash-balance').value=String(economy.maxCashBalance??1000000);$('#max-bank-balance').value=String(economy.maxBankBalance??1000000);$('#money-audit-channel').innerHTML='<option value="">Disabled</option>'+state.data.channels.map(c=>`<option value="${c.id}"># ${escapeHtml(c.name)}</option>`).join('');$('#money-audit-channel').value=economy.moneyAuditChannelId||'';document.querySelectorAll('[data-options]').forEach(select=>{const items=select.dataset.options==='roles'?state.data.roles:state.data.channels,prefix=select.dataset.options==='roles'?'@ ':'# ',first=select.options[0]?.outerHTML||'';select.innerHTML=first+items.map(item=>`<option value="${item.id}">${prefix}${escapeHtml(item.name)}</option>`).join('')});document.querySelectorAll('[data-economy-key]').forEach(field=>{const value=economy.config?.[field.dataset.economyKey];field.value=value!==undefined&&value!==null?String(value):field.tagName==='SELECT'?field.options[0]?.value||'':field.defaultValue});$('#emoji-search').value='';renderEmojiGrid();updateCurrencyPreview();restoreEmptyEconomyNumbers();updateActivityCommandFields()}
 function showEconomyPage(name){document.querySelectorAll('.economy-page').forEach(page=>page.classList.toggle('hidden',page.dataset.economyPage!==name));document.querySelectorAll('.economy-child').forEach(button=>button.classList.toggle('active',button.dataset.economyPage===name));const active=[...document.querySelectorAll('.economy-child')].find(button=>button.dataset.economyPage===name);$('#title').textContent=active?.textContent||'Economy';$('#crumb').textContent='DASHBOARD / ECONOMY / '+(active?.textContent||name).toUpperCase();if(name==='general')return loadEconomyLeaderboard(1)}
@@ -104,7 +138,7 @@ function currencyMarkup(){const symbol=state.data.economy?.currencySymbol||'$',e
 function priceMarkup(price,index=0){const system=(state.data.economySystems||[]).find(entry=>entry.id===Number(price.systemId)),symbol=price.currencySymbol||system?.currency_symbol||'$',emoji=currencyEmoji(symbol),value=`${emoji?`<img src="${escapeHtml(emoji.url)}" alt=":${escapeHtml(emoji.name)}:">`:escapeHtml(symbol)} ${Number(price.amount||0).toLocaleString()}`;return index?`<span class="joined-price"><small>${String(price.operator||'or').toUpperCase()}</small> ${value}</span>`:value}
 function renderShopItems(){updateShopItemLimit();const allItems=state.data.shopItems||[],query=$('#shop-item-search').value.trim().toLowerCase(),category=$('#shop-category-filter').value,categories=[...new Set(allItems.map(item=>item.category).filter(Boolean))].sort();const currentCategory=$('#shop-category-filter').value;$('#shop-category-filter').innerHTML='<option value="">All categories</option>'+categories.map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');$('#shop-category-filter').value=categories.includes(currentCategory)?currentCategory:'';const items=allItems.filter(item=>(!query||item.name.toLowerCase().includes(query)||String(item.description||'').toLowerCase().includes(query))&&(!category||item.category===category));$('#no-shop-items').classList.toggle('hidden',items.length>0);$('#shop-items').innerHTML=items.map(item=>{const emoji=state.data.emojis.find(e=>e.id===item.emoji_id),prices=item.prices?.length?item.prices:[{amount:item.price,currencySymbol:state.data.economy?.currencySymbol}];return `<article class="shop-item-tile" data-id="${item.id}"><div class="shop-tile-icon">${emoji?`<img src="${escapeHtml(emoji.url)}" alt=":${escapeHtml(emoji.name)}:">`:'?'}</div><h3 title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</h3><div class="shop-tile-price">${prices.map(priceMarkup).join(' <small>OR</small> ')}</div><button class="remove-shop-item" type="button" title="Delete item">×</button></article>`}).join('')}
 function updateShopItemLimit(){const limit=state.data?.premium?.shopItemLimit||(state.data?.premium?.active?100:20),button=$('#add-shop-item');button.disabled=(state.data?.shopItems||[]).length>=limit;button.title=`Up to ${limit} shop items, including unlisted items`}
-function shopBuilderLimit(){return state.data?.premium?.active?4:2}
+function shopBuilderLimit(){return state.data?.premium?.shopBuilderLimit ?? 2}
 function updateShopBuilderLimits(){updateShopRequirementSummaries();updateShopActionSummaries();const limit=shopBuilderLimit();for(const [kind,label] of [['requirement','requirements'],['action','actions']]){const button=$('#add-shop-'+kind);button.disabled=$('#shop-'+label).children.length>=limit;button.title=`Up to ${limit} ${label} per item`}}
 function addShopBuilderRow(kind){const container=$('#shop-'+(kind==='requirement'?'requirements':'actions'));if(container.children.length>=shopBuilderLimit())return;container.insertAdjacentHTML('beforeend',kind==='requirement'?shopRequirementRow():shopActionRow());updateShopBuilderLimits()}
 function shopRequirementOptions(type){return `<option value="">Select ${type==='item'?'an item':'a role'}</option>`+(type==='item'?state.data.shopItems:state.data.roles).map(r=>`<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('')}
@@ -139,7 +173,7 @@ function showSection(section, toolsPage = $('#tools-tabs .active')?.dataset.tool
   document.querySelectorAll('.panel').forEach(panel=>panel.classList.add('hidden'));
   if(economy){renderEconomySystemSelect();switchEconomySystem(state.economySystemId);renderEconomyIssues();$('#economy').classList.remove('hidden');return showEconomyPage(document.querySelector('.economy-child.active')?.dataset.economyPage||'general')}
   else if(levels)showTab(document.querySelector('#level-tabs .level-tab.active')?.dataset.tab||'overview');
-  else if(section==='premium'){$('#premium').classList.remove('hidden');$('#title').textContent='Premium';$('#crumb').textContent='DASHBOARD / PREMIUM';renderPremium()}
+  else if(section==='premium'){$('#premium').classList.remove('hidden');$('#title').textContent='Premium';$('#crumb').textContent='DASHBOARD / PREMIUM';renderPremium();void refreshPremiumStatus()}
   else if(section==='tools')return showToolsPage(toolsPage);
   else if(section==='moderation'){$('#moderation').classList.remove('hidden');showModerationPage(document.querySelector('.moderation-child.active')?.dataset.moderationPage||'overview');return loadModeration()}
 }
@@ -386,17 +420,21 @@ function updateCreatorAlertCreationControls() {
 function updateCreatorAlertSavedHelp(view, error) {
   const usage = Number.isInteger(view.limit) ? `${view.alerts.length} of ${view.limit} alerts used.` : '';
   const limitHelp = view.alerts.length >= view.limit ? 'Remove alerts until you are below the limit.' : '';
-  const help = !limitHelp && !error ? 'Select a saved alert to edit and preview it.' : '';
-  creatorAlertSavedHelp.textContent = [usage, limitHelp, error, help].filter(Boolean).join(' ');
+  const paused = view.alerts.findIndex(alert => alert.id === editingCreatorAlert) >= view.limit;
+  const pausedHelp = paused ? 'This alert is paused until this server has Premium.' : '';
+  const help = !limitHelp && !error && !paused ? 'Select a saved alert to edit and preview it.' : '';
+  creatorAlertSavedHelp.textContent = [pausedHelp, usage, paused ? '' : limitHelp, paused ? '' : error, help].filter(Boolean).join(' ');
+  creatorAlertSavedHelp.classList.toggle('premium-pause-text', paused);
 }
 
 function renderCreatorAlerts(view) {
   creatorAlertSaved.replaceChildren(
     new Option('Select a saved alert', ''),
-    ...view.alerts.map(alert => {
+    ...view.alerts.map((alert, index) => {
       const channel = view.channels.find(channel => channel.id === alert.channel_id);
       const label = creatorAlertLabels[alert.platform] + ' · ' + alert.account;
-      return new Option(channel ? label + ' · #' + channel.name : label, alert.id);
+      const qualifiedLabel = (channel ? label + ' · #' + channel.name : label) + (index >= view.limit ? ' (Paused - Premium)' : '');
+      return new Option(qualifiedLabel, alert.id);
     })
   );
 }
@@ -699,7 +737,14 @@ function renderAutoRoles() {
     const row = document.createElement('fieldset');
     row.className = 'embed-field';
     row.innerHTML = '<legend></legend><div class="form-grid"><label>Duration<select><option value="permanent">Permanent</option><option value="temporary">Temporary</option></select></label><label>Hours<input type="number" min="1" step="1" required></label></div><div class="embed-actions"><button type="button" class="outline">Remove</button></div>';
-    row.querySelector('legend').textContent = role?.name ?? 'Unavailable role';
+    const legend = row.querySelector('legend');
+    legend.textContent = role?.name ?? 'Unavailable role';
+    if (hours !== null && hours > maxHours) {
+      const notice = document.createElement('small');
+      notice.className = 'premium-pause-text';
+      notice.textContent = 'Paused until this server has Premium.';
+      legend.after(notice);
+    }
     const mode = row.querySelector('select');
     const length = row.querySelector('input');
     length.max = String(maxHours);
@@ -1606,7 +1651,7 @@ async function flushSave(){if(!saveTimer)return;clearTimeout(saveTimer);saveTime
 function showSaveToast(message,error=false){const toast=$('#save-state');clearTimeout(toastTimer);toast.textContent=message;toast.classList.toggle('error',error);toast.classList.remove('hidden');toastTimer=setTimeout(()=>toast.classList.add('hidden'),2200)}
 $('#leveling').addEventListener('input',scheduleSave);$('#leveling').addEventListener('change',scheduleSave);$('#rewards').addEventListener('input',scheduleSave);$('#rewards').addEventListener('change',scheduleSave);
 $('#reward-list').addEventListener('change',event=>{if(event.target.classList.contains('reward-role'))syncRewardRoleTint(event.target)});
-async function save(){if(!state.systemId)return;const {guildId,systemId}=state,enabled=$('#modal-system-enabled').checked;const rewards=[...document.querySelectorAll('.reward-row')].map(r=>({level:+r.querySelector('.reward-level').value,roleId:r.querySelector('.reward-role').value})).filter(r=>r.roleId),selected=q=>[...$(q).selectedOptions].map(o=>o.value),channelMode=$('#channel-rule-mode').value,roleMode=$('#role-rule-mode').value;try{await request(`/api/guilds/${state.guildId}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({systemId:state.systemId,name:$('#system-name').value,contentType:$('#content-type').value,specificWords:$('#specific-words').value,enabled,minXp:$('#min-xp').value,maxXp:$('#max-xp').value,minXpValues:$('#min-xp').value,maxXpValues:$('#max-xp').value,cooldownSeconds:+$('#cooldown').value,announceDestination:$('#announce-destination').value,announceChannelId:$('#channel').value,announceMessage:$('#message').value,rewards,allowedChannelIds:channelMode==='allow'?selected('#allowed-channels'):[],deniedChannelIds:channelMode==='deny'?selected('#denied-channels'):[],allowedRoleIds:roleMode==='allow'?selected('#allowed-roles'):[],deniedRoleIds:roleMode==='deny'?selected('#denied-roles'):[]})});if(guildId!==state.guildId)return;const system=state.data.systems.find(s=>s.id===systemId);if(system){system.name=$('#system-name').value;system.enabled=enabled?1:0;system.specific_words=$('#specific-words').value;system.min_xp_values=$('#min-xp').value;system.max_xp_values=$('#max-xp').value;system.rewards=rewards}if(systemId!==state.systemId)return;renderSystemSelect();$('#reward-count').textContent=rewards.length;$('#status').textContent=$('#modal-system-enabled').checked?'Active':'Paused';showSaveToast('Changes saved')}catch(error){if(guildId!==state.guildId||systemId!==state.systemId)return;if($('#modal-system-enabled').checked===enabled){$('#modal-system-enabled').checked=!!state.data.systems.find(s=>s.id===systemId)?.enabled;renderModuleStatuses()}showSaveToast(error.message,true)}}
+async function save(){if(!state.systemId)return;const {guildId,systemId}=state,enabled=$('#modal-system-enabled').checked;const rewards=[...document.querySelectorAll('.reward-row')].map(r=>({level:+r.querySelector('.reward-level').value,roleId:r.querySelector('.reward-role').value})).filter(r=>r.roleId),selected=q=>[...$(q).selectedOptions].map(o=>o.value),channelMode=$('#channel-rule-mode').value,roleMode=$('#role-rule-mode').value;try{await request(`/api/guilds/${state.guildId}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({systemId:state.systemId,name:$('#system-name').value,contentType:$('#content-type').value,specificWords:$('#specific-words').value,enabled,minXp:$('#min-xp').value,maxXp:$('#max-xp').value,minXpValues:$('#min-xp').value,maxXpValues:$('#max-xp').value,cooldownSeconds:+$('#cooldown').value,announceDestination:$('#announce-destination').value,announceChannelId:$('#channel').value,announceMessage:$('#message').value,rewards,allowedChannelIds:channelMode==='allow'?selected('#allowed-channels'):[],deniedChannelIds:channelMode==='deny'?selected('#denied-channels'):[],allowedRoleIds:roleMode==='allow'?selected('#allowed-roles'):[],deniedRoleIds:roleMode==='deny'?selected('#denied-roles'):[]})});if(guildId!==state.guildId)return;const system=state.data.systems.find(s=>s.id===systemId);if(system){system.name=$('#system-name').value;system.enabled=enabled?1:0;system.specific_words=$('#specific-words').value;system.min_xp_values=$('#min-xp').value;system.max_xp_values=$('#max-xp').value;system.rewards=rewards}if(systemId!==state.systemId)return;renderSystemSelect();$('#reward-count').textContent=rewards.length;showSaveToast('Changes saved')}catch(error){if(guildId!==state.guildId||systemId!==state.systemId)return;if($('#modal-system-enabled').checked===enabled){$('#modal-system-enabled').checked=!!state.data.systems.find(s=>s.id===systemId)?.enabled;renderModuleStatuses()}showSaveToast(error.message,true)}}
 async function confirmLogout() {
   if (!window.confirm('Do you want to log out?')) return;
   try {
@@ -2017,7 +2062,14 @@ $('#role-rule-mode').onchange=event=>switchLevelRuleMode(event.target.value,'rol
 const loadGuildWithoutCategories=loadGuild;
 loadGuild=async(...args)=>{await loadGuildWithoutCategories(...args);syncRuleChannelOptions()};
 const selectSingleSystem=selectSystem;
-selectSystem=async id=>{await selectSingleSystem(id);syncContentTypeSelect();renderCategoryPicker();tintSelectedRoleNames()};
+selectSystem=async id=>{
+  const selection = selectSingleSystem(id);
+  renderSelectedSystemPause($('#system-select'), state.data.systems, state.systemId, state.data.premium?.systemLimit ?? 2);
+  await selection;
+  syncContentTypeSelect();
+  renderCategoryPicker();
+  tintSelectedRoleNames();
+};
 function disableSavedInfo(root=document){root.querySelectorAll('input, textarea').forEach(field=>{field.setAttribute('autocomplete','off');field.setAttribute('data-1p-ignore','true');field.setAttribute('data-lpignore','true');field.setAttribute('data-form-type','other')})}
 disableSavedInfo();
 new MutationObserver(records=>records.forEach(record=>record.addedNodes.forEach(node=>{if(node.nodeType===1){if(node.matches?.('input, textarea'))disableSavedInfo(node.parentElement||document);else disableSavedInfo(node)}}))).observe(document.body,{childList:true,subtree:true});
@@ -2042,7 +2094,34 @@ function closeShopPaymentOptions(){$('#shop-payment-modal').classList.add('hidde
 $('#close-shop-payment').onclick=closeShopPaymentOptions;$('#shop-payment-modal .modal-backdrop').onclick=closeShopPaymentOptions;
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('#shop-payment-modal').classList.contains('hidden'))closeShopPaymentOptions()});
 $('#shop-items').addEventListener('click',event=>{const button=event.target.closest('.more-prices');if(!button)return;event.stopImmediatePropagation();const item=state.data.shopItems.find(item=>item.id===Number(button.closest('.shop-item-tile').dataset.id));if(item){shopPaymentTrigger=button;openShopPaymentOptions(item)}},true);
-renderShopItems=()=>{renderShopItemsWithoutIssueBadges();(state.data?.shopItems||[]).forEach(item=>{const tile=document.querySelector(`.shop-item-tile[data-id="${item.id}"]`);if(!tile)return;const groups=shopPaymentGroups(item),visible=groups.length>2?groups.slice(0,1):groups,priceBox=tile.querySelector('.shop-tile-price');priceBox.innerHTML=visible.map(group=>group.length>2?'<div class="shop-payment-group">'+compactShopPrice(group[0])+`<button class="more-prices" type="button">+${group.length-1} currencies</button></div>`:shopPaymentMarkup(group)).join('<span class="shop-price-or">or</span>')+(groups.length>2?`<button class="more-prices" type="button">+${groups.length-1} payment options</button>`:'');if(item.deactivation_reason){tile.classList.add('has-issue');tile.insertAdjacentHTML('beforeend',`<span class="shop-item-issue-badge" title="${escapeHtml(item.deactivation_reason)}">1</span>`)}})};
+function shopItemIssue(item) {
+  return state.data?.premium?.paused?.shopItems?.[item.id] || item.deactivation_reason;
+}
+
+renderShopItems=()=>{
+  renderShopItemsWithoutIssueBadges();
+  for (const item of state.data?.shopItems ?? []) {
+    const tile = document.querySelector(`.shop-item-tile[data-id="${item.id}"]`);
+    if (!tile) continue;
+    const groups = shopPaymentGroups(item);
+    const visible = groups.length > 2 ? groups.slice(0, 1) : groups;
+    tile.querySelector('.shop-tile-price').innerHTML = visible.map(group =>
+      group.length > 2
+        ? '<div class="shop-payment-group">' + compactShopPrice(group[0]) + `<button class="more-prices" type="button">+${group.length - 1} currencies</button></div>`
+        : shopPaymentMarkup(group)
+    ).join('<span class="shop-price-or">or</span>') + (groups.length > 2 ? `<button class="more-prices" type="button">+${groups.length - 1} payment options</button>` : '');
+    const issue = shopItemIssue(item);
+    if (issue) {
+      tile.classList.add('has-issue');
+      const badge = document.createElement('span');
+      badge.className = 'shop-item-issue-badge';
+      badge.title = issue;
+      badge.setAttribute('aria-label', issue);
+      badge.textContent = '1';
+      tile.append(badge);
+    }
+  }
+};
 
 const economyToolbar=document.createElement('section');
 economyToolbar.id='economy-system-toolbar';economyToolbar.className='system-toolbar hidden';
@@ -2051,8 +2130,21 @@ $('#economy').before(economyToolbar);
 document.body.insertAdjacentHTML('beforeend','<div id="economy-issues-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="economy-issues-title"><button class="modal-backdrop" aria-label="Close"></button><div class="modal-card"><div class="modal-head"><div><small>ECONOMY</small><h2 id="economy-issues-title">Needs attention</h2></div><button id="close-economy-issues" class="modal-close" type="button" aria-label="Close">×</button></div><div id="economy-issues-list" class="economy-issues-list"></div><div class="shop-modal-actions"><button id="view-affected-shop-items" class="button" type="button">View shop items</button></div></div></div>');
 document.body.insertAdjacentHTML('beforeend','<div id="economy-system-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="economy-system-modal-title"><button class="modal-backdrop" aria-label="Close"></button><div class="modal-card"><div class="modal-head"><div><small>ECONOMY SYSTEM</small><h2 id="economy-system-modal-title">System settings</h2></div><button id="close-economy-system-modal" class="modal-close" type="button" aria-label="Close">×</button></div><label>System name<input id="economy-system-name" maxlength="50" autocomplete="off"></label><div class="modal-toggle"><div><b>System enabled</b><small>Members can use and earn this currency.</small></div><label class="switch"><input id="economy-system-enabled" type="checkbox"><span></span></label></div><div class="modal-toggle"><div><b>Activity commands</b><small id="economy-activity-help">Daily and work rewards use this currency. Enable in only one system.</small></div><label class="switch"><input id="economy-activity-enabled" type="checkbox" aria-label="Activity commands"><span></span></label></div><div class="template-zone"><div><b>Use another system as template</b><small>Copies currency settings without copying member balances or shop items.</small></div><div class="template-controls"><div class="template-select-wrap"><select id="economy-template-system"></select><span id="economy-template-placeholder">No system selected</span></div><button id="apply-economy-template" type="button" disabled>Apply template</button></div><p id="economy-template-warning" class="template-warning hidden">Applying replaces this system\'s currency, limits, earning settings, access rules, and custom names. Member balances are kept.</p></div><div class="danger-zone"><div><b>Delete economy system</b><small>This permanently removes its currency balances and settings.</small></div><button id="delete-economy-system" type="button">Delete system</button></div></div></div>');
 function switchEconomySystem(id){const system=(state.data.economySystems||[]).find(entry=>entry.id===Number(id));if(!system)return;state.economySystemId=system.id;state.data.economy={...state.data.economy,systemId:system.id,currencySymbol:system.currency_symbol,startingBalance:system.starting_balance,maxCashBalance:system.max_cash_balance,maxBankBalance:system.max_bank_balance,config:{activityCommandsEnabled:false,...(system.config||{}),...(state.data.economySharedNames||{})}};renderEconomy();renderEconomyRules();renderShopItems();loadEconomyLeaderboard(1)}
-function renderEconomySystemSelect(){renderModuleStatuses();const select=$('#economy-system-select'),systems=state.data?.economySystems||[];if(!state.economySystemId||!systems.some(system=>system.id===state.economySystemId))state.economySystemId=systems[0]?.id||null;select.innerHTML=systems.map(system=>`<option value="${system.id}">${escapeHtml(system.name)}</option>`).join('');select.value=String(state.economySystemId||'');$('#new-economy-system').disabled=systems.length>=(state.data.premium?.systemLimit||2);$('#new-economy-system').title=$('#new-economy-system').disabled?`Limit of ${state.data.premium?.systemLimit||2} economy systems reached`:''}
-$('#economy-system-select').onchange=async event=>{await flushEconomySave();switchEconomySystem(event.target.value)};
+function renderEconomySystemSelect() {
+  renderModuleStatuses();
+  const systems = state.data?.economySystems ?? [];
+  const limit = state.data?.premium?.systemLimit ?? 2;
+  if (!systems.some(system => system.id === state.economySystemId)) state.economySystemId = systems[0]?.id ?? null;
+  renderSystemOptions($('#economy-system-select'), systems, state.economySystemId, limit);
+  const add = $('#new-economy-system');
+  add.disabled = systems.length >= limit;
+  add.title = add.disabled ? `Limit of ${limit} economy systems reached` : '';
+}
+$('#economy-system-select').onchange=async event=>{
+  await flushEconomySave();
+  switchEconomySystem(event.target.value);
+  renderSelectedSystemPause(event.target, state.data.economySystems, state.economySystemId, state.data.premium?.systemLimit ?? 2);
+};
 $('#new-economy-system').onclick=async()=>{try{const system=await request(`/api/guilds/${state.guildId}/economy/systems`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});system.config=JSON.parse(system.config_json||'{}');state.data.economySystems.push(system);renderEconomySystemSelect();switchEconomySystem(system.id);showSaveToast('Economy system created')}catch(error){showSaveToast(error.message,true)}};
 function closeEconomySystemModal(){$('#economy-system-modal').classList.add('hidden');$('#delete-economy-system').dataset.confirming='false';$('#delete-economy-system').textContent='Delete system'}
 $('#economy-system-settings').onclick=()=>{const system=state.data.economySystems.find(entry=>entry.id===state.economySystemId),templates=state.data.economySystems.filter(entry=>entry.id!==state.economySystemId);if(!system)return;$('#economy-system-name').value=system.name;$('#economy-system-enabled').checked=system.enabled!==0;const activityOwner=state.data.economySystems.find(entry=>String(entry.config?.activityCommandsEnabled)==='true'&&entry.id!==system.id);$('#economy-activity-enabled').checked=String(system.config?.activityCommandsEnabled)==='true';$('#economy-activity-enabled').disabled=!!activityOwner;$('#economy-activity-help').textContent=activityOwner?`Disable activity commands in ${activityOwner.name} before enabling them here.`:'Daily and work rewards use this currency. Enable in only one system.';$('#economy-template-system').innerHTML=templates.length?'<option value="">-</option>'+templates.map(entry=>`<option value="${entry.id}">${escapeHtml(entry.name)}</option>`).join(''):'<option value="">No other systems available</option>';$('#economy-template-system').value='';$('#economy-template-placeholder').textContent=templates.length?'No system selected':'No other systems available';$('#economy-template-placeholder').classList.remove('hidden');$('#apply-economy-template').disabled=true;$('#economy-template-warning').classList.add('hidden');$('#delete-economy-system').disabled=state.data.economySystems.length===1;$('#economy-system-modal').classList.remove('hidden');$('#economy-system-name').focus()};
@@ -2089,8 +2181,15 @@ $('#economy-system-name').oninput=scheduleEconomySystemSettingsSave;$('#economy-
 $('#economy-template-system').onchange=()=>{const selected=!!$('#economy-template-system').value;$('#economy-template-placeholder').classList.toggle('hidden',selected);$('#apply-economy-template').disabled=!selected;$('#economy-template-warning').classList.toggle('hidden',!selected)};
 $('#apply-economy-template').onclick=async()=>{const sourceSystemId=Number($('#economy-template-system').value);if(!sourceSystemId)return;try{clearTimeout(economySystemSettingsTimer);await flushEconomySave();const updated=await request(`/api/guilds/${state.guildId}/economy/systems/${state.economySystemId}/apply-template`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sourceSystemId})}),system=state.data.economySystems.find(entry=>entry.id===state.economySystemId);Object.assign(system,updated,{config:JSON.parse(updated.config_json||'{}')});switchEconomySystem(state.economySystemId);closeEconomySystemModal();showSaveToast('Template applied')}catch(error){showSaveToast(error.message,true)}};
 $('#delete-economy-system').onclick=async event=>{const button=event.currentTarget;if(button.disabled)return;if(button.dataset.confirming!=='true'){button.dataset.confirming='true';button.textContent='Are you sure?';return}try{clearTimeout(economySaveTimer);clearTimeout(economySystemSettingsTimer);economySaveTimer=null;economySystemSettingsTimer=null;const deletedId=state.economySystemId,deletedSystem=state.data.economySystems.find(entry=>entry.id===deletedId),affected=state.data.shopItems.filter(item=>(item.prices||[]).some(price=>Number(price.systemId)===deletedId));await request(`/api/guilds/${state.guildId}/economy/systems/${deletedId}`,{method:'DELETE'});affected.forEach(item=>{item.listed=0;item.deactivation_reason=`The connected economy system “${deletedSystem?.name||'Unknown system'}” was deleted.`});state.data.economySystems=state.data.economySystems.filter(entry=>entry.id!==deletedId);state.economySystemId=state.data.economySystems[0].id;renderEconomySystemSelect();switchEconomySystem(state.economySystemId);renderEconomyIssues();closeEconomySystemModal();showSaveToast(`Economy system deleted${affected.length?` · ${affected.length} shop item${affected.length===1?'':'s'} deactivated`:''}`)}catch(error){showSaveToast(error.message,true)}};
-function economyIssues(){return (state.data?.shopItems||[]).filter(item=>item.deactivation_reason)}
-function renderEconomyIssues(){const issues=economyIssues(),button=$('#economy-issues');button.classList.toggle('hidden',!issues.length);button.querySelector('.issue-count').textContent=issues.length?String(issues.length):'';$('#economy-issues-list').innerHTML=issues.length?issues.map(item=>`<article><b>${escapeHtml(item.name)}</b><p>${escapeHtml(item.deactivation_reason)}</p></article>`).join(''):'<div class="empty compact">No economy issues.</div>'}
+function renderEconomyIssues(){
+  const issues = (state.data?.shopItems ?? []).map(item => ({ name: item.name, reason: shopItemIssue(item) })).filter(item => item.reason);
+  const button = $('#economy-issues');
+  button.classList.toggle('hidden', !issues.length);
+  button.querySelector('.issue-count').textContent = issues.length ? String(issues.length) : '';
+  $('#economy-issues-list').innerHTML = issues.length
+    ? issues.map(item => `<article><b>${escapeHtml(item.name)}</b><p>${escapeHtml(item.reason)}</p></article>`).join('')
+    : '<div class="empty compact">No economy issues.</div>';
+}
 function closeEconomyIssues(){$('#economy-issues-modal').classList.add('hidden')}
 $('#economy-issues').onclick=()=>{renderEconomyIssues();$('#economy-issues-modal').classList.remove('hidden')};$('#close-economy-issues').onclick=closeEconomyIssues;$('#economy-issues-modal .modal-backdrop').onclick=closeEconomyIssues;
 $('#view-affected-shop-items').onclick=()=>{closeEconomyIssues();showEconomyPage('shop')};
@@ -2379,31 +2478,216 @@ recentCases.addEventListener('toggle', refreshRecentCases);
 document.addEventListener('visibilitychange', refreshRecentCases);
 setInterval(refreshRecentCases, 15_000);
 
-const premiumPanel=document.createElement('section');
-premiumPanel.className='premium-panel hidden';
-premiumPanel.innerHTML='<div><b id="premium-label">Server premium</b><p id="premium-details"></p></div><button id="buy-premium" class="outline" type="button">Buy with PayPal</button><a id="manage-premium" class="outline hidden" href="https://www.paypal.com/" target="_blank" rel="noopener noreferrer">Manage in PayPal</a><button id="retry-premium" class="outline hidden" type="button">Verify subscription</button>';
+const premiumPanel = document.createElement('section');
+premiumPanel.className = 'premium-panel hidden';
+premiumPanel.innerHTML = `
+  <div class="premium-copy">
+    <b id="premium-label">Server premium</b>
+    <p id="premium-details"></p>
+    <p id="premium-assignment-details" class="hidden"></p>
+    <p id="premium-pause-notice" class="premium-pause-text hidden" role="status">Features over the free plan limits are paused. They resume when this server has Premium again.</p>
+  </div>
+  <div class="premium-actions">
+    <a id="subscribe-discord" class="button hidden" target="_blank" rel="noopener noreferrer">Subscribe on Discord</a>
+    <button id="assign-discord-premium" class="button hidden" type="button">Activate Premium here</button>
+    <button id="buy-premium" class="outline" type="button">Subscribe with PayPal</button>
+    <a id="manage-premium" class="outline hidden" href="https://www.paypal.com/" target="_blank" rel="noopener noreferrer">Manage in PayPal</a>
+    <button id="retry-premium" class="outline hidden" type="button">Verify subscription</button>
+  </div>`;
 $('#premium .settings-disclosure').append(premiumPanel);
-function renderPremium(){
-  renderModuleStatuses();
-  const premium=state.data?.premium;if(!premium)return;
-  premiumPanel.classList.remove('hidden');
-  $('#premium-label').textContent=premium.active?'Premium active':'Free plan';
-  $('#premium-details').textContent=(premium.active?'Up to 10 leveling systems, 10 economy systems, and 30 Creator Alerts. Manage or cancel recurring billing in PayPal.':'Up to 2 leveling systems, 2 economy systems, and 5 Creator Alerts. Premium unlocks 10 systems of each type and 30 Creator Alerts. Extra systems pause when Premium ends and keep their data.')+' Premium subscriptions help support the bot, hosting, and ongoing development.';
-  if (creatorAlertView?.guildId === state.guildId && Number.isInteger(premium.creatorAlertLimit)) {
-    creatorAlertView.limit = premium.creatorAlertLimit;
-    updateCreatorAlertCreationControls();
-    const selected = creatorAlertView.alerts.find(alert => alert.id === editingCreatorAlert);
-    updateCreatorAlertSavedHelp(creatorAlertView, selected?.error);
-  }
-  $('#buy-premium').classList.toggle('hidden',premium.active);
-  $('#manage-premium').classList.toggle('hidden',!premium.active);
-  $('#buy-premium').disabled=!premium.checkoutAvailable;
-  $('#buy-premium').textContent=premium.checkoutAvailable?'Subscribe with PayPal':'Premium checkout unavailable';
+document.body.insertAdjacentHTML('beforeend', `
+  <dialog id="premium-assignment-dialog" class="modal-card premium-assignment-dialog" aria-labelledby="premium-assignment-title" aria-describedby="premium-assignment-description">
+    <h2 id="premium-assignment-title"></h2>
+    <p id="premium-assignment-description"></p>
+    <div class="premium-actions">
+      <button id="cancel-premium-assignment" class="outline" type="button" autofocus>Cancel</button>
+      <button id="confirm-premium-assignment" class="button" type="button">Confirm</button>
+    </div>
+  </dialog>`);
+
+const premiumAssignmentDialog = $('#premium-assignment-dialog');
+const premiumAssignmentButton = $('#assign-discord-premium');
+const discordPremiumLink = $('#subscribe-discord');
+const premiumAssignmentConfirm = $('#confirm-premium-assignment');
+const premiumAssignmentCancel = $('#cancel-premium-assignment');
+let premiumRequestVersion = 0;
+let premiumWriting = false;
+
+function serverRailButton(guildId) {
+  return [...document.querySelectorAll('[data-server-id]')].find(button => button.dataset.serverId === guildId);
 }
+
+function setServerPremiumIndicator(button, active, paused) {
+  if (!button) return;
+  button.classList.toggle('has-premium-pause', Boolean(paused));
+  const status = active ? ' (Premium)' : paused ? ' (Premium features paused)' : '';
+  button.setAttribute('aria-label', button.title + status);
+}
+
+function refreshServerPremiumIndicators() {
+  return request('/api/guilds').then(guilds => {
+    for (const guild of guilds) setServerPremiumIndicator(serverRailButton(guild.id), guild.premiumActive, guild.premiumPaused);
+  }).catch(() => {});
+}
+
+function renderPremiumPings(premium) {
+  const paused = premium.paused ?? {};
+  const economyPaused = Boolean(paused.economy || Object.keys(paused.shopItems ?? {}).length);
+  const toolsPaused = Boolean(paused.creatorAlerts || paused.autoRoles);
+  const anyPaused = Boolean(paused.levels || economyPaused || toolsPaused);
+  for (const [selector, flag] of [
+    ['.tab[data-section="levels"]', paused.levels],
+    ['.tab[data-section="economy"]', economyPaused],
+    ['.tab[data-section="tools"]', toolsPaused],
+    ['.tab[data-section="premium"]', anyPaused],
+    ['.tools-child[data-tools-page="creator-alerts"]', paused.creatorAlerts],
+    ['.tools-child[data-tools-page="auto-roles"]', paused.autoRoles]
+  ]) {
+    const button = $(selector);
+    button.classList.toggle('has-premium-pause', Boolean(flag));
+    button.title = flag ? 'Premium features paused' : '';
+  }
+  $('#premium-pause-notice').classList.toggle('hidden', !anyPaused);
+  setServerPremiumIndicator(serverRailButton(state.guildId), premium.active, anyPaused);
+}
+
+function renderPremium() {
+  const premium = state.data?.premium;
+  if (!premium) return;
+  premiumPanel.classList.remove('hidden');
+  $('#premium-label').textContent = premium.active ? 'Premium active' : 'Free plan';
+  $('#premium-details').textContent = (premium.active
+    ? 'Up to 10 leveling systems, 10 economy systems, 100 shop items, and 30 Creator Alerts.'
+    : 'Up to 2 leveling systems, 2 economy systems, 20 shop items, and 5 Creator Alerts. Premium raises these limits.') +
+    ' Premium subscriptions help support the bot, hosting, and ongoing development.';
+  const assignment = premium.discordAssignment;
+  const assignedHere = assignment && assignment.guildId === state.guildId;
+  const copy = $('#premium-assignment-details');
+  const sourceName = assignment?.guildId && serverRailButton(assignment.guildId)?.title;
+  copy.classList.toggle('hidden', !assignment && !premium.discordStoreUrl);
+  copy.textContent = assignedHere ? 'Your Discord subscription is assigned to this server. Manage billing in Discord under User Settings > Subscriptions.'
+    : assignment?.guildId ? `Your Discord subscription is assigned to ${sourceName || 'another server'}.`
+      : assignment ? 'Your Discord subscription is ready to assign.'
+        : 'A Discord subscription gives Premium to one server you manage. You can move it from this page.';
+  premiumAssignmentButton.classList.toggle('hidden', !assignment || (premium.active && !assignedHere));
+  premiumAssignmentButton.classList.toggle('outline', Boolean(assignedHere));
+  premiumAssignmentButton.classList.toggle('button', !assignedHere);
+  premiumAssignmentButton.textContent = assignedHere ? 'Remove from this server'
+    : assignment?.guildId ? 'Move Premium here' : 'Activate Premium here';
+  premiumAssignmentButton.disabled = premiumWriting;
+  discordPremiumLink.classList.toggle('hidden', !premium.discordStoreUrl || premium.active || Boolean(assignment));
+  if (premium.discordStoreUrl) discordPremiumLink.href = premium.discordStoreUrl;
+  $('#buy-premium').classList.toggle('hidden', premium.active || Boolean(assignment) || (!premium.checkoutAvailable && !!premium.discordStoreUrl));
+  $('#buy-premium').disabled = premiumWriting || !premium.checkoutAvailable;
+  $('#buy-premium').textContent = premium.checkoutAvailable ? 'Subscribe with PayPal' : 'Premium checkout unavailable';
+  $('#manage-premium').classList.toggle('hidden', !premium.paypalActive);
+  renderPremiumPings(premium);
+
+  if (creatorAlertView?.guildId === state.guildId && Number.isInteger(premium.creatorAlertLimit)) {
+    const view = creatorAlertView;
+    if (view.limit !== premium.creatorAlertLimit && view.channels) {
+      view.limit = premium.creatorAlertLimit;
+      renderCreatorAlerts(view);
+      creatorAlertSaved.value = String(editingCreatorAlert ?? '');
+      updateCreatorAlertCreationControls();
+      updateCreatorAlertSavedHelp(view, view.alerts.find(alert => alert.id === editingCreatorAlert)?.error);
+    }
+  }
+}
+
+function applyPremiumStatus(premium) {
+  const previous = state.data.premium;
+  if (JSON.stringify(previous) === JSON.stringify(premium)) return;
+  state.data.premium = premium;
+  renderPremium();
+  if (previous.systemLimit !== premium.systemLimit) {
+    renderSystemSelect();
+    renderEconomySystemSelect();
+  }
+  if (previous.shopItemLimit !== premium.shopItemLimit || JSON.stringify(previous.paused?.shopItems) !== JSON.stringify(premium.paused?.shopItems)) {
+    renderShopItems();
+    renderEconomyIssues();
+    if (!$('#shop-item-modal').classList.contains('hidden')) updateShopBuilderLimits();
+  }
+  if (autoRolesData?.guildId === state.guildId && autoRolesData.maxHours !== premium.autoRoleMaxHours) {
+    autoRolesData.maxHours = premium.autoRoleMaxHours;
+    if (!autoRolesData.saving) renderAutoRoles();
+  }
+}
+
+async function refreshPremiumStatus() {
+  if (!state.data || serverSwitchPending || premiumWriting || document.hidden) return;
+  const guildId = state.guildId;
+  const version = ++premiumRequestVersion;
+  try {
+    const premium = await request(`/api/guilds/${guildId}/premium`);
+    if (version !== premiumRequestVersion || guildId !== state.guildId || serverSwitchPending) return;
+    const moved = premium.discordAssignment?.guildId !== state.data.premium.discordAssignment?.guildId;
+    applyPremiumStatus(premium);
+    if (moved) void refreshServerPremiumIndicators();
+  } catch {
+    // A later refresh can recover without interrupting the current editor.
+  }
+}
+
+function setPremiumWriting(writing) {
+  premiumWriting = writing;
+  premiumAssignmentConfirm.disabled = premiumAssignmentCancel.disabled = writing;
+  renderPremium();
+}
+
+async function updatePremiumAssignment(guildId, previousGuildId, assigned) {
+  if (premiumWriting || serverSwitchPending || guildId !== state.guildId) return;
+  ++premiumRequestVersion;
+  setPremiumWriting(true);
+  try {
+    const premium = await request(`/api/guilds/${guildId}/premium/discord-assignment`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ previousGuildId, assigned })
+    });
+    if (guildId === state.guildId) applyPremiumStatus(premium);
+    premiumAssignmentDialog.close();
+    showSaveToast(assigned ? (previousGuildId ? 'Premium moved to this server' : 'Premium activated') : 'Premium removed from this server');
+    void refreshServerPremiumIndicators();
+  } catch (error) {
+    premiumAssignmentDialog.close();
+    showSaveToast(error.message, true);
+  } finally {
+    setPremiumWriting(false);
+    void refreshPremiumStatus();
+  }
+}
+
+premiumAssignmentButton.onclick = () => {
+  const assignment = state.data?.premium?.discordAssignment;
+  if (!assignment || premiumWriting || serverSwitchPending) return;
+  const target = state.guildId;
+  const source = assignment.guildId;
+  if (source === null) {
+    void updatePremiumAssignment(target, null, true);
+    return;
+  }
+  const move = source !== target;
+  const sourceName = serverRailButton(source)?.title || 'the other server';
+  $('#premium-assignment-title').textContent = move ? 'Move Premium here?' : 'Remove Premium from this server?';
+  $('#premium-assignment-description').textContent =
+    `Features above the free limits on ${move ? sourceName : 'this server'} will pause. Their settings and data are kept.`;
+  premiumAssignmentConfirm.textContent = move ? 'Move Premium' : 'Remove Premium';
+  premiumAssignmentConfirm.onclick = () => void updatePremiumAssignment(target, source, move);
+  premiumAssignmentDialog.showModal();
+};
+premiumAssignmentCancel.onclick = () => premiumAssignmentDialog.close();
+premiumAssignmentDialog.addEventListener('cancel', event => { if (premiumWriting) event.preventDefault(); });
+document.addEventListener('visibilitychange', refreshPremiumStatus);
+window.addEventListener('focus', refreshPremiumStatus);
+setInterval(refreshPremiumStatus, 30_000);
+
 $('#buy-premium').onclick=async()=>{
-  const guildId=state.guildId;$('#buy-premium').disabled=true;
+  const guildId=state.guildId;
+  ++premiumRequestVersion;
+  setPremiumWriting(true);
   try{await flushSave();await flushEconomySave();const order=await request('/api/guilds/'+guildId+'/premium/subscriptions',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});location.assign(order.approvalUrl)}
-  catch(error){showSaveToast(error.message,true);renderPremium()}
+  catch(error){showSaveToast(error.message,true);setPremiumWriting(false)}
 };
 async function finishPremiumCheckout(){
   const query=new URLSearchParams(location.search);
@@ -2412,7 +2696,7 @@ async function finishPremiumCheckout(){
   if(query.get('premium')!=='return')return;
   const guildId=dashboardRoute().guildId??query.get('guild');if(state.guildId!==guildId)return;
   const retry=$('#retry-premium');retry.disabled=true;
-  try{const premium=await request('/api/guilds/'+guildId+'/premium/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscriptionId:query.get('subscription_id')||''})});if(state.guildId!==guildId)return;state.data.premium=premium;history.replaceState({},'',location.pathname);retry.classList.add('hidden');renderPremium();renderSystemSelect();renderEconomySystemSelect();showSaveToast('Premium activated')}
+  try{const premium=await request('/api/guilds/'+guildId+'/premium/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({subscriptionId:query.get('subscription_id')||''})});if(state.guildId!==guildId)return;++premiumRequestVersion;applyPremiumStatus(premium);history.replaceState({},'',location.pathname);retry.classList.add('hidden');showSaveToast('Premium activated')}
   catch(error){retry.classList.remove('hidden');showSaveToast(error.message,true)}finally{retry.disabled=false}
 }
 $('#retry-premium').onclick=finishPremiumCheckout;
@@ -2508,6 +2792,14 @@ async function restoreDashboardView(userId, guilds) {
   });
 }
 
+const serverSelectionFrame = document.createElement('span');
+serverSelectionFrame.className = 'server-selection-frame hidden';
+serverSelectionFrame.setAttribute('aria-hidden', 'true');
+const reducedServerFrameMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+let serverFrameMovement;
+window.addEventListener('resize', () => positionServerFrame(serverRailButton(state.guildId), false));
+reducedServerFrameMotion.addEventListener('change', () => serverFrameMovement?.cancel());
+
 boot();
 
 async function switchServer(guildId){
@@ -2524,22 +2816,65 @@ async function switchServer(guildId){
 }
 function syncServerRail(){
   let serverName = 'Crazyland';
+  let selectedButton;
   document.querySelectorAll('[data-server-id]').forEach(button=>{
     const active=button.dataset.serverId===state.guildId;
     button.classList.toggle('active',active);
     if (active) {
       button.setAttribute('aria-current', 'true');
       serverName = button.title;
+      selectedButton = button;
     } else button.removeAttribute('aria-current');
   });
   const heading = $('#sidebar-server-name');
   heading.textContent = serverName;
   heading.title = serverName;
+  positionServerFrame(selectedButton);
 }
+
+function positionServerFrame(button, animate = true) {
+  const frame = serverSelectionFrame;
+  if (!button) {
+    serverFrameMovement?.cancel();
+    frame.classList.add('hidden');
+    return;
+  }
+  const left = `${button.offsetLeft + button.offsetWidth / 2}px`;
+  const top = `${button.offsetTop + button.offsetHeight / 2}px`;
+  const appearing = frame.classList.contains('hidden');
+  if (!appearing && frame.style.left === left && frame.style.top === top) return;
+
+  const prior = appearing ? null : frame.getBoundingClientRect();
+  serverFrameMovement?.cancel();
+  frame.style.left = left;
+  frame.style.top = top;
+  frame.classList.remove('hidden');
+  if (!animate || reducedServerFrameMotion.matches) return;
+  const options = { duration: 420, easing: 'cubic-bezier(.22, .72, .29, 1)' };
+  if (!prior) {
+    serverFrameMovement = frame.animate([
+      { opacity: 0, transform: 'translate(12px, -16px) rotate(-55deg) scale(.65)' },
+      { opacity: 1, transform: 'none' }
+    ], options);
+    return;
+  }
+  const target = frame.getBoundingClientRect();
+  const dx = prior.left - target.left;
+  const dy = prior.top - target.top;
+  const vertical = Math.abs(dy) > Math.abs(dx);
+  const arcX = dx / 2 + (vertical ? 8 : 0);
+  const arcY = dy / 2 - (vertical ? 0 : 6);
+  serverFrameMovement = frame.animate([
+    { transform: `translate(${dx}px, ${dy}px)` },
+    { transform: `translate(${arcX}px, ${arcY}px)` },
+    { transform: 'none' }
+  ], options);
+}
+
 function renderServerRail(guilds){
-  const list=$('#server-rail-list');list.replaceChildren();
+  const list=$('#server-rail-list');list.replaceChildren(serverSelectionFrame);
   for(const guild of guilds){
-    const button=document.createElement('button');button.type='button';button.className='server-rail-button';button.dataset.serverId=guild.id;button.title=guild.name;button.setAttribute('aria-label',guild.name);
+    const button=document.createElement('button');button.type='button';button.className='server-rail-button';button.dataset.serverId=guild.id;button.title=guild.name;setServerPremiumIndicator(button, guild.premiumActive, guild.premiumPaused);
     if(guild.icon&&/^\d+$/.test(guild.id)&&/^[a-zA-Z0-9_]+$/.test(guild.icon)){
       const image=document.createElement('img');image.src='https://cdn.discordapp.com/icons/'+guild.id+'/'+guild.icon+'.png?size=80';image.alt='';image.addEventListener('error',()=>{button.textContent=guild.name.slice(0,1).toUpperCase();});button.append(image);
     }else button.textContent=guild.name.slice(0,1).toUpperCase();

@@ -2180,6 +2180,21 @@ select[data-economy-key="bonusRole"] {
 .warning-escalation{margin-top:24px;padding-top:20px;border-top:1px solid var(--discord-border)}.warning-escalation p{color:var(--discord-muted);line-height:1.6}.warning-rule-row{display:flex;gap:14px;align-items:end;flex-wrap:wrap;margin-bottom:16px}.warning-rule-row label{flex:1;min-width:130px}.warning-rule-row input,.warning-rule-row select{width:100%}.warning-rule-remove{margin-bottom:0}#add-warning-rule{margin-top:8px}
 
 .premium-panel{display:flex;align-items:center;gap:16px;padding:16px;margin-bottom:20px;border:1px solid #41414b;border-radius:12px}.premium-panel p{margin:6px 0;color:#aaa}.premium-panel>div{flex:1}.premium-panel.hidden{display:none}
+.premium-panel { flex-wrap: wrap; }
+.premium-panel > .premium-copy { flex: 1 1 320px; min-width: 0; }
+.premium-panel > .premium-actions { flex: 0 1 auto; }
+.premium-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.premium-actions a { display: inline-flex; align-items: center; white-space: nowrap; }
+.premium-assignment-dialog { width: min(440px, calc(100% - 32px)); margin: auto; color: var(--discord-text); }
+.premium-assignment-dialog::backdrop { background: #000a; }
+.premium-assignment-dialog h2 { margin-top: 0; font-size: 19px; }
+.premium-assignment-dialog p { margin: 12px 0 20px; color: var(--discord-muted); line-height: 1.5; }
+.premium-assignment-dialog .premium-actions { justify-content: flex-end; }
+.premium-pause-text::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: #ed4245; }
+.premium-system-notice { display: block; margin-top: 6px; line-height: 1.4; }
+.sidebar .tab.has-premium-pause::after,
+.tools-child.has-premium-pause::after { content: ''; display: inline-block; flex: none; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: #ed4245; }
+.server-rail-button.has-premium-pause::after { content: ''; position: absolute; z-index: 2; right: -2px; bottom: -2px; width: 10px; height: 10px; border: 2px solid var(--discord-input); border-radius: 50%; background: #ed4245; }
 
 
 
@@ -2313,10 +2328,30 @@ select[data-economy-key="bonusRole"] {
 }
 .server-rail-brand { border-radius: 12px; background: var(--discord-accent); color: #fff; font-size: 20px; }
 .server-rail-divider { width: 24px; height: 1px; background: var(--discord-border); }
-.server-rail-list { display: flex; flex-direction: column; gap: 14px; align-items: center; width: 100%; }
+.server-rail-list { position: relative; display: flex; flex-direction: column; gap: 14px; align-items: center; width: 100%; }
 .server-rail-button img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .server-rail-button:hover, .server-rail-button.active { border-radius: 12px; color: var(--discord-text); background: var(--discord-surface-raised); }
-.server-rail-button.active::before { content: ''; position: absolute; left: -15px; top: 7px; width: 3px; height: 24px; border-radius: 0 3px 3px 0; background: var(--discord-accent); }
+.server-rail-button.active { border-radius: 50%; }
+.server-selection-frame {
+  position: absolute;
+  z-index: 1;
+  width: 48px;
+  height: 48px;
+  margin: -24px;
+  pointer-events: none;
+}
+.server-selection-frame::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url('/images/premiumframe.png') center / contain no-repeat;
+  image-rendering: pixelated;
+  animation: server-frame-spin 12s linear infinite;
+}
+@keyframes server-frame-spin { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) {
+  .server-selection-frame::before { animation: none; }
+}
 .server-rail-invite { font-size: 23px; font-weight: 300; color: var(--discord-muted); }
 .server-rail-invite:hover { background: var(--discord-accent); color: #fff; }
 .server-rail :focus-visible { outline: 2px solid var(--discord-accent); outline-offset: 3px; }
@@ -2324,7 +2359,6 @@ select[data-economy-key="bonusRole"] {
   .server-rail { position: static; width: 100%; height: 60px; padding: 10px 16px; flex-direction: row; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--discord-border); }
   .server-rail-list { width: auto; flex-direction: row; }
   .server-rail-divider { width: 1px; height: 24px; flex-shrink: 0; }
-  .server-rail-button.active::before { left: 7px; top: auto; bottom: -8px; width: 24px; height: 3px; border-radius: 3px 3px 0 0; }
 }
 
 /* Keep dashboard controls within narrow screens and short viewports. */

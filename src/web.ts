@@ -11,22 +11,33 @@ import { config } from "./config.js";
 import { db, ensureDefaultEconomySystem, ensureDefaultSystem, setSystemModuleEnabled, settingsFor, xpForLevel } from "./db.js";
 import "./types.js";
 import { feedbackStore } from "./feedback.js";
-import { enforceShopItemLimit, premiumStatus, createPremiumSubscription, activatePremiumSubscription, handlePayPalWebhook, startPremiumSync } from "./premium.js";
+import {
+  activatePremiumSubscription, createPremiumSubscription, discordPremiumAssignment, handlePayPalWebhook,
+  PremiumAssignmentError, premiumStatus, setDiscordPremiumAssignment, shopPremiumPauses, startPremiumSync
+} from "./premium.js";
 
 import { moderationSettings, moderationCases, validateWarningRules } from "./moderation.js";
 import { autoModError, deleteAutoModRule, listAutoModRules, writeAutoModRule } from "./automod.js";
 import { composeEmbed, composeV2Container, EmbedInputError, updateV2Text } from "./embed-composer.js";
-import { canSendWelcome, renderGuildMemberCard, setMemberCardChannel, memberCardChannelId } from "./welcome.js";
+import { canSendWelcome, isWelcomeChannel, renderGuildMemberCard, setMemberCardChannel, memberCardChannelId } from "./welcome.js";
 import { renderMemberCard } from "./level-card.js";
 import { canSetAutoRole, listAutoRoles, maxAutoRoleHours, saveAutoRole } from "./auto-roles.js";
-
 import { creatorPlatformColorDefaults, deleteCreatorAlert, listCreatorAlerts, listCreatorPlatformAvatars, listCreatorPlatformColors, previewCreatorAlert, saveCreatorAlert, saveCreatorPlatformAvatar, saveCreatorPlatformColor, startCreatorAlerts } from "./creator-alerts.js";
 
 const app = express();
+const localGuilds = new Map<string, import("discord.js").Guild>();
+const localUser = { id: "100000000000000002", username: "Local Tester", avatar: null, accessToken: "" };
 if (config.redirectUri.startsWith("https://")) app.set("trust proxy", 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json());
 app.use(cookieSession({ name: "crazyland", keys: [config.sessionSecret], httpOnly: true, sameSite: "lax", secure: config.redirectUri.startsWith("https://"), maxAge: 7 * 864e5 }));
+app.use((req, res, next) => {
+  if (!localGuilds.size) return next();
+  if (req.hostname !== "localhost" && req.hostname !== "127.0.0.1") return res.sendStatus(403);
+  if (req.method !== "GET" && req.headers.origin !== new URL(config.redirectUri).origin) return res.sendStatus(403);
+  req.session!.user = localUser;
+  next();
+});
 app.get("/dashboard.html", (req, res) => res.redirect("/manage" + req.originalUrl.slice(req.path.length)));
 app.get(["/manage", /^\/manage\/\d{17,20}\/modules\/(?:levels|economy|moderation|premium|creator-alerts|tools(?:\/(?:embeds|welcome|auto-roles|creator-alerts))?)\/?$/], (req, res) => {
   if (!req.session?.user) {
@@ -143,15 +154,22 @@ app.get("/api/meta", (_req, res) => res.json({ clientId: config.clientId }));
 app.get("/api/me", requireUser, (req, res) => res.json({ id: req.session!.user!.id, username: req.session!.user!.username, avatar: req.session!.user!.avatar }));
 
 app.get("/api/guilds", requireUser, async (req, res) => {
+  if (localGuilds.size) return res.json([...localGuilds.values()].map(guild => ({
+    id: guild.id, name: guild.name, icon: guild.icon, installed: true, ...serverPremiumIndicators(guild.id)
+  })));
   const user = req.session!.user!;
   const guilds = await userGuilds(user.id, user.accessToken);
   const manageable = guilds.filter(g => (BigInt(g.permissions) & PermissionFlagsBits.ManageGuild) === PermissionFlagsBits.ManageGuild);
-  res.json(manageable.map(g => ({ ...g, installed: bot.guilds.cache.has(g.id) })));
+  res.json(manageable.map(guild => {
+    const installed = bot.guilds.cache.has(guild.id);
+    return { ...guild, installed, ...serverPremiumIndicators(installed ? guild.id : null) };
+  }));
 });
 
 function canManage(req: Request, res: Response, next: NextFunction) {
   const guild = bot.guilds.cache.get(String(req.params.guildId));
   if (!guild) return res.status(404).json({ error: "Bot is not in this server" });
+  if (localGuilds.has(guild.id)) return next();
   const user = req.session!.user!;
   userGuilds(user.id, user.accessToken).then(guilds => {
     const match = guilds.find(g => g.id === guild.id);
@@ -162,13 +180,41 @@ function canManage(req: Request, res: Response, next: NextFunction) {
 
 const paymentOrigin = new URL(config.redirectUri).origin;
 
+function premiumPauses(guildId: string, plan: ReturnType<typeof premiumStatus>) {
+  if (plan.active) return { levels: 0, economy: 0, shopItems: {}, creatorAlerts: 0, autoRoles: 0 };
+  const count = (sql: string, limit: number) => Number(db.prepare(sql).get(guildId, limit)?.count ?? 0);
+  return {
+    levels: count("SELECT COUNT(*) AS count FROM (SELECT id, enabled FROM leveling_systems WHERE guild_id = ? ORDER BY id LIMIT -1 OFFSET ?) WHERE enabled = 1", plan.systemLimit),
+    economy: count("SELECT COUNT(*) AS count FROM (SELECT id, enabled FROM economy_systems WHERE guild_id = ? AND deleted = 0 ORDER BY id LIMIT -1 OFFSET ?) WHERE enabled = 1", plan.systemLimit),
+    shopItems: Object.fromEntries(shopPremiumPauses(guildId, plan)),
+    creatorAlerts: count("SELECT COUNT(*) AS count FROM (SELECT id FROM creator_alerts WHERE guild_id = ? ORDER BY id LIMIT -1 OFFSET ?)", plan.creatorAlertLimit),
+    autoRoles: count("SELECT COUNT(*) AS count FROM auto_roles WHERE guild_id = ? AND hours > ?", maxAutoRoleHours(guildId))
+  };
+}
+
+function serverPremiumIndicators(guildId: string | null) {
+  if (!guildId) return { premiumActive: false, premiumPaused: false };
+  const plan = premiumStatus(guildId);
+  const pauses = premiumPauses(guildId, plan);
+  const premiumPaused = Boolean(pauses.levels || pauses.economy || pauses.creatorAlerts || pauses.autoRoles || Object.keys(pauses.shopItems).length);
+  return { premiumActive: plan.active, premiumPaused };
+}
+
+function dashboardPremium(guildId: string, userId: string) {
+  const plan = premiumStatus(guildId);
+  return {
+    ...plan, discordAssignment: discordPremiumAssignment(userId), paused: premiumPauses(guildId, plan),
+    autoRoleMaxHours: maxAutoRoleHours(guildId)
+  };
+}
+
 const creatorAlertsPath = "/api/guilds/:guildId/creator-alerts";
 app.get(creatorAlertsPath + "/:id/preview", requireUser, canManage, async (req, res, next) => {
   const guildId = String(req.params.guildId);
   const id = Number(req.params.id);
   if (!Number.isSafeInteger(id) || id < 1) return res.status(404).json({ error: "Alert not found." });
   try {
-    const preview = await previewCreatorAlert(guildId, id, false);
+    const preview = await previewCreatorAlert(guildId, id, localGuilds.has(guildId));
     if (!preview) return res.status(404).json({ error: "Alert not found." });
     res.json(preview);
   } catch (error) {
@@ -185,6 +231,7 @@ app.get(creatorAlertsPath, requireUser, canManage, (req, res) => {
     channels, alerts: listCreatorAlerts(guild.id), platformAvatars: listCreatorPlatformAvatars(guild.id),
     platformColors: listCreatorPlatformColors(guild.id), platformColorDefaults: creatorPlatformColorDefaults,
     limit: premiumStatus(guild.id).creatorAlertLimit,
+    preview: localGuilds.has(guild.id)
   });
 });
 
@@ -216,7 +263,7 @@ const writeCreatorAlert = async (req: Request, res: Response) => {
   const id = req.params.id === undefined ? undefined : Number(req.params.id);
   if (id !== undefined && (!Number.isSafeInteger(id) || id < 1)) return res.status(400).json({ error: "Invalid alert." });
   try {
-    await saveCreatorAlert(guild, req.body ?? {}, false, id);
+    await saveCreatorAlert(guild, req.body ?? {}, localGuilds.has(guild.id), id);
     res.json({ alerts: listCreatorAlerts(guild.id), limit: premiumStatus(guild.id).creatorAlertLimit });
   } catch (error) {
     const message = error instanceof Error && !("code" in error) ? error.message : "Could not save this alert.";
@@ -236,12 +283,12 @@ app.delete(creatorAlertsPath + "/:id", requireUser, canManage, (req, res) => {
 const autoRolesPath = "/api/guilds/:guildId/tools/auto-roles";
 app.get(autoRolesPath, requireUser, canManage, async (req, res) => {
   const guild = bot.guilds.cache.get(String(req.params.guildId))!;
-
-  const actor = await guild.members.fetch({ user: req.session!.user!.id, force: true }).catch(() => null);
-  if (!actor?.permissions.has([PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles]))
+  const local = localGuilds.has(guild.id);
+  const actor = local ? null : await guild.members.fetch({ user: req.session!.user!.id, force: true }).catch(() => null);
+  if (!local && !actor?.permissions.has([PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles]))
     return res.status(403).json({ error: "Manage Server and Manage Roles permissions are required." });
-  await guild.members.fetchMe();
-  const roles = guild.roles.cache.filter(role => role.id !== guild.id && canSetAutoRole(role, actor))
+  if (!local) await guild.members.fetchMe();
+  const roles = guild.roles.cache.filter(role => role.id !== guild.id && (local ? !role.managed : canSetAutoRole(role, actor!)))
     .map(({ id, name }) => ({ id, name }));
   res.json({ roles, rules: listAutoRoles(guild.id), maxHours: maxAutoRoleHours(guild.id) });
 });
@@ -256,16 +303,18 @@ app.put(autoRolesPath + "/:roleId", requireUser, canManage, async (req, res) => 
   if (!/^\d{17,20}$/.test(roleId) || typeof enabled !== "boolean" ||
       (enabled && hours !== null && (!Number.isInteger(hours) || hours < 1 || hours > maxHours)))
     return res.status(400).json({ error: `Choose Permanent or enter 1 to ${maxHours} hours.` });
-
-  const actor = await guild.members.fetch({ user: req.session!.user!.id, force: true }).catch(() => null);
-  if (!actor?.permissions.has([PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles]))
+  const local = localGuilds.has(guild.id);
+  const actor = local ? null : await guild.members.fetch({ user: req.session!.user!.id, force: true }).catch(() => null);
+  if (!local && !actor?.permissions.has([PermissionFlagsBits.ManageGuild, PermissionFlagsBits.ManageRoles]))
     return res.status(403).json({ error: "Manage Server and Manage Roles permissions are required." });
   if (enabled) {
     if (roleId === guild.id) return res.status(400).json({ error: "The @everyone role is already assigned to every member." });
-    await guild.members.fetchMe({ force: true });
-    const role = await guild.roles.fetch(roleId, { force: true });
-    if (!role || !canSetAutoRole(role, actor))
+    if (!local) await guild.members.fetchMe({ force: true });
+    const role = local ? guild.roles.cache.get(roleId) : await guild.roles.fetch(roleId, { force: true });
+    if (!role || (local ? role.managed : !canSetAutoRole(role, actor!)))
       return res.status(400).json({ error: "Choose a role that you and the bot can manage." });
+    if (hours !== null && hours > maxAutoRoleHours(guild.id))
+      return res.status(403).json({ error: "This duration requires Server Premium." });
   }
   saveAutoRole(guild.id, roleId, enabled ? hours : undefined);
   res.json({ roleId, hours: enabled ? hours : null });
@@ -274,10 +323,10 @@ app.put(autoRolesPath + "/:roleId", requireUser, canManage, async (req, res) => 
 app.get("/api/guilds/:guildId/tools/welcome/preview", requireUser, canManage, async (req, res) => {
   const guild = bot.guilds.cache.get(String(req.params.guildId))!;
   const user = req.session!.user!;
-  const avatarUrl = user.avatar
+  const avatarUrl = user.avatar && !localGuilds.has(guild.id)
     ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=256`
     : path.resolve("public/images/gear.png");
-  const member = await guild.members.fetch(user.id).catch(() => null);
+  const member = localGuilds.has(guild.id) ? null : await guild.members.fetch(user.id).catch(() => null);
   const image = member
     ? await renderGuildMemberCard(member, "welcome")
     : await renderMemberCard({ username: user.username, avatarUrl }, guild.name, "welcome");
@@ -288,9 +337,9 @@ for (const kind of ["welcome", "goodbye"] as const) {
   const memberCardPath = "/api/guilds/:guildId/tools/" + kind;
   app.get(memberCardPath, requireUser, canManage, async (req, res) => {
     const guild = bot.guilds.cache.get(String(req.params.guildId))!;
-    const botMember = await guild.members.fetchMe();
+    const botMember = localGuilds.has(guild.id) ? null : await guild.members.fetchMe();
     const channels = [...guild.channels.cache.values()]
-      .filter(channel => canSendWelcome(channel, botMember))
+      .filter(channel => botMember ? canSendWelcome(channel, botMember) : isWelcomeChannel(channel))
       .map(({ id, name }) => ({ id, name }));
     res.json({ channelId: memberCardChannelId(guild.id, kind), channels });
   });
@@ -303,8 +352,12 @@ for (const kind of ["welcome", "goodbye"] as const) {
     if (channelId !== null && (typeof channelId !== "string" || !/^\d{17,20}$/.test(channelId)))
       return res.status(400).json({ error: `Choose a ${kind} channel.` });
     if (channelId !== null) {
-      const channel = await guild.channels.fetch(channelId, { force: true }).catch(() => null);
-      const allowed = canSendWelcome(channel, await guild.members.fetchMe({ force: true }));
+      const channel = localGuilds.has(guild.id)
+        ? guild.channels.cache.get(channelId) ?? null
+        : await guild.channels.fetch(channelId, { force: true }).catch(() => null);
+      const allowed = localGuilds.has(guild.id)
+        ? isWelcomeChannel(channel)
+        : canSendWelcome(channel, await guild.members.fetchMe({ force: true }));
       if (!allowed) return res.status(400).json({ error: "Choose a channel where the bot can send messages and attach files." });
     }
     setMemberCardChannel(guild.id, kind, channelId);
@@ -394,6 +447,10 @@ app.route(editEmbedPath).all(requireUser, canManage).all(async (req, res) => {
 });
 app.get(embedPath, requireUser, canManage, async (req, res) => {
   const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+  if (localGuilds.has(guild.id)) return res.json({
+    channels: guild.channels.cache.map(({ id, name }) => ({ id, name })),
+    saved: []
+  });
   try {
     const [member, botMember, channels] = await Promise.all([
       guild.members.fetch({ user: req.session!.user!.id, force: true }).catch(() => null),
@@ -453,12 +510,40 @@ function paymentRequest(req: Request, res: Response, next: NextFunction) {
   if (req.headers.origin !== paymentOrigin || !req.is("application/json")) return res.status(403).json({ error: "Invalid payment request" });
   next();
 }
+const guildPremiumPath = "/api/guilds/:guildId/premium";
+app.get(guildPremiumPath, requireUser, canManage, (req, res) => {
+  res.set("Cache-Control", "private, no-store").json(dashboardPremium(String(req.params.guildId), req.session!.user!.id));
+});
+app.put(guildPremiumPath + "/discord-assignment", requireUser, canManage, paymentRequest, async (req, res, next) => {
+  const guild = bot.guilds.cache.get(String(req.params.guildId))!;
+  const userId = req.session!.user!.id;
+  const { previousGuildId, assigned } = req.body ?? {};
+  if (typeof assigned !== "boolean" || (previousGuildId !== null && (typeof previousGuildId !== "string" || !/^\d{17,20}$/.test(previousGuildId)))) {
+    return res.status(400).json({ error: "Invalid Premium assignment." });
+  }
+  if (!localGuilds.has(guild.id)) {
+    const member = await guild.members.fetch({ user: userId, force: true }).catch(() => null);
+    if (!member?.permissions.has(PermissionFlagsBits.ManageGuild)) return res.status(403).json({ error: "Manage Server permission required." });
+  }
+  try {
+    setDiscordPremiumAssignment(userId, guild.id, previousGuildId, assigned);
+    res.json(dashboardPremium(guild.id, userId));
+  } catch (error) {
+    if (error instanceof PremiumAssignmentError) return res.status(409).json({ error: error.message });
+    next(error);
+  }
+});
 app.post("/api/guilds/:guildId/premium/subscriptions", requireUser, canManage, paymentRequest, async (req, res) => {
   try { res.status(201).json(await createPremiumSubscription(String(req.params.guildId), req.session!.user!.id, paymentOrigin)); }
   catch { res.status(503).json({ error: "PayPal checkout is unavailable. Please try again later." }); }
 });
 app.post("/api/guilds/:guildId/premium/activate", requireUser, canManage, paymentRequest, async (req, res) => {
-  try { res.json(await activatePremiumSubscription(String(req.body.subscriptionId || ""), String(req.params.guildId), req.session!.user!.id)); }
+  try {
+    const guildId = String(req.params.guildId);
+    const userId = req.session!.user!.id;
+    await activatePremiumSubscription(String(req.body.subscriptionId || ""), guildId, userId);
+    res.json(dashboardPremium(guildId, userId));
+  }
   catch { res.status(409).json({ error: "Subscription could not be verified. Approve it in PayPal, then try again." }); }
 });
 app.post("/api/paypal/webhook", async (req, res) => {
@@ -613,13 +698,14 @@ app.get("/api/guilds/:guildId/settings", requireUser, canManage, (req, res) => {
   const economySharedNames = Object.fromEntries(["shopName", "inventoryName", "leaderboardName"].filter(key => economyConfig[key] !== undefined).map(key => [key, economyConfig[key]]));
   const economySystems = db.prepare("SELECT * FROM economy_systems WHERE guild_id=? AND deleted=0 ORDER BY id").all(guild.id) as Array<any>;
   const economy = { systemId: economySystems[0]?.id, currencySymbol: guildSettings.currency_symbol, startingBalance: guildSettings.starting_balance, maxCashBalance: guildSettings.max_cash_balance, maxBankBalance: guildSettings.max_bank_balance, moneyAuditChannelId: guildSettings.money_audit_channel_id, config: economyConfig };
-  enforceShopItemLimit(guild.id);
+  const premium = dashboardPremium(guild.id, req.session!.user!.id);
+  if (premium.active) shopPremiumPauses(guild.id, premium);
   const shopItems = (db.prepare("SELECT * FROM economy_shop_items WHERE guild_id=? ORDER BY id DESC").all(guild.id) as Array<any>).map(item => ({
     ...item,
     prices: db.prepare(`SELECT p.id,p.system_id AS systemId,p.amount,p.join_operator AS operator,s.name,s.currency_symbol AS currencySymbol,s.enabled AS systemEnabled,s.deleted AS systemDeleted
       FROM economy_shop_prices p JOIN economy_systems s ON s.id=p.system_id WHERE p.item_id=? ORDER BY p.id`).all(item.id)
   }));
-  res.json({ modules: { levels: !!guildSettings.levels_module_enabled, economy: !!guildSettings.economy_module_enabled }, moderationEnabled: !!moderationSettings(guild.id).enabled, premium: premiumStatus(guild.id), systems: detailedSystems, economySystems: economySystems.map(system => ({ ...system, config: { ...economyTransactionDefaults, ...JSON.parse(system.config_json || "{}") } })), economySharedNames, channels, ruleChannels, roles, emojis, economy, shopItems, memberCount: guild.memberCount });
+  res.json({ modules: { levels: !!guildSettings.levels_module_enabled, economy: !!guildSettings.economy_module_enabled }, moderationEnabled: !!moderationSettings(guild.id).enabled, premium, systems: detailedSystems, economySystems: economySystems.map(system => ({ ...system, config: { ...economyTransactionDefaults, ...JSON.parse(system.config_json || "{}") } })), economySharedNames, channels, ruleChannels, roles, emojis, economy, shopItems, memberCount: guild.memberCount });
 });
 
 app.put("/api/guilds/:guildId/economy", requireUser, canManage, async (req, res) => {
@@ -659,10 +745,9 @@ app.put("/api/guilds/:guildId/economy", requireUser, canManage, async (req, res)
 
 app.post("/api/guilds/:guildId/economy/shop-items", requireUser, canManage, (req, res) => {
   const guildId = String(req.params.guildId), guild = bot.guilds.cache.get(guildId)!, body = req.body || {};
-  const itemLimit = enforceShopItemLimit(guildId);
+  const { shopItemLimit: itemLimit, shopBuilderLimit: builderLimit } = premiumStatus(guildId);
   const itemCount = (db.prepare("SELECT COUNT(*) AS count FROM economy_shop_items WHERE guild_id=?").get(guildId) as { count: number }).count;
   if (itemCount >= itemLimit) return res.status(403).json({ error: `This server can create up to ${itemLimit} shop items, including unlisted items.` });
-  const builderLimit = premiumStatus(guildId).active ? 4 : 2;
   const requirements = Array.isArray(body.requirements) ? body.requirements : [];
   const actions = Array.isArray(body.actions) ? body.actions : [];
   if (requirements.length > builderLimit || actions.length > builderLimit) return res.status(403).json({ error: `This server can have up to ${builderLimit} requirements and ${builderLimit} actions per item.` });
@@ -744,9 +829,9 @@ app.post("/api/guilds/:guildId/economy/systems/:systemId/apply-template", requir
 
 app.put("/api/guilds/:guildId/economy/shop-items/:itemId", requireUser, canManage, (req, res) => {
   const guildId = String(req.params.guildId), itemId = Number(req.params.itemId), guild = bot.guilds.cache.get(guildId)!, body = req.body || {};
-  const existing = db.prepare("SELECT id FROM economy_shop_items WHERE id=? AND guild_id=?").get(itemId, guildId);
+  const { shopItemLimit: itemLimit, shopBuilderLimit: builderLimit } = premiumStatus(guildId);
+  const existing = db.prepare("SELECT listed FROM economy_shop_items WHERE id=? AND guild_id=?").get(itemId, guildId);
   if (!existing) return res.status(404).json({ error: "Shop item not found" });
-  const builderLimit = premiumStatus(guildId).active ? 4 : 2;
   const requirements = Array.isArray(body.requirements) ? body.requirements : [];
   const actions = Array.isArray(body.actions) ? body.actions : [];
   if (requirements.length > builderLimit || actions.length > builderLimit) return res.status(403).json({ error: `This server can have up to ${builderLimit} requirements and ${builderLimit} actions per item.` });
@@ -762,10 +847,9 @@ app.put("/api/guilds/:guildId/economy/shop-items/:itemId", requireUser, canManag
   const prices = (Array.isArray(body.prices) ? body.prices : []).map((entry: any, index: number) => ({ systemId: Number(entry.systemId), amount: Math.max(0, Math.min(9_000_000_000_000_000, Math.floor(Number(entry.amount) || 0))), operator: index > 0 && String(entry.operator).toLowerCase() === "and" ? "and" : "or" })).filter((entry: any) => validSystems.has(entry.systemId)).slice(0, 20) as Array<{ systemId: number; amount: number; operator: "and" | "or" }>;
   if (!prices.length) return res.status(400).json({ error: "Add at least one valid price" });
   if (new Set(prices.map(entry => entry.systemId)).size !== prices.length) return res.status(400).json({ error: "An economy system cannot be used more than once in the same price" });
-  const itemLimit = enforceShopItemLimit(guildId);
   const listed = !!body.listed;
   const listedCount = (db.prepare("SELECT COUNT(*) AS count FROM economy_shop_items WHERE guild_id=? AND listed=1 AND id<>?").get(guildId, itemId) as { count: number }).count;
-  if (listed && listedCount >= itemLimit) return res.status(403).json({ error: `This server can list up to ${itemLimit} shop items. Unlist another item first.` });
+  if (listed && !existing.listed && listedCount >= itemLimit) return res.status(403).json({ error: `This server can list up to ${itemLimit} shop items. Unlist another item first.` });
   if (listed && prices.some(price => !systems.find(system => system.id === price.systemId)?.enabled)) return res.status(400).json({ error: "Enable every connected economy system before listing this item" });
   const allowedApplicationEmojis = new Set(["1553368966850813963", "1553368950082113536"]);
   const submittedEmoji = String(body.emojiId || "");
@@ -985,4 +1069,16 @@ app.get("/api/guilds/:guildId/economy/leaderboard", requireUser, canManage, asyn
 
 app.use("/api", (_req, res) => res.status(404).json({ error: "This dashboard feature is unavailable on the server. Refresh and try again." }));
 app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => { console.error(error); res.status(500).json({ error: "Something went wrong" }); });
-export const startWeb = () => { startPremiumSync(); startCreatorAlerts(bot); return app.listen(config.port, () => console.log(`Dashboard running at http://localhost:${config.port}`)); };
+export function startWeb(testGuilds?: import("discord.js").Guild | import("discord.js").Guild[]) {
+  const onListen = () => console.log(`Dashboard running at http://localhost:${config.port}`);
+  if (testGuilds) {
+    for (const guild of Array.isArray(testGuilds) ? testGuilds : [testGuilds]) {
+      localGuilds.set(guild.id, guild);
+      bot.guilds.cache.set(guild.id, guild);
+    }
+    return app.listen(config.port, "localhost", onListen);
+  }
+  startPremiumSync();
+  startCreatorAlerts(bot);
+  return app.listen(config.port, onListen);
+}

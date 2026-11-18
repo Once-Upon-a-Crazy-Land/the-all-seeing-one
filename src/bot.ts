@@ -167,7 +167,7 @@ bot.on(Events.InteractionCreate, async interaction => {
     ensureDefaultSystem(interaction.guildId);
     const query = interaction.options.getFocused().toLowerCase();
     const systems = db.prepare("SELECT id, name FROM leveling_systems WHERE guild_id=? ORDER BY id").all(interaction.guildId) as Array<{ id: number; name: string }>;
-    await interaction.respond(systems.filter(system => system.name.toLowerCase().includes(query)).slice(0, 25).map(system => ({ name: system.name, value: String(system.id) })));
+    await interaction.respond(systems.filter(system => system.name.toLowerCase().includes(query) && systemAvailable(interaction.guildId!, "leveling", system.id)).slice(0, 25).map(system => ({ name: system.name, value: String(system.id) })));
     return;
   }
   if (interaction.isModalSubmit()) {
@@ -193,6 +193,7 @@ bot.on(Events.InteractionCreate, async interaction => {
     ? db.prepare("SELECT id, name FROM leveling_systems WHERE id=? AND guild_id=?").get(requestedId, interaction.guild.id)
     : db.prepare("SELECT id, name FROM leveling_systems WHERE guild_id=? ORDER BY id LIMIT 1").get(interaction.guild.id)) as { id: number; name: string } | undefined;
   if (!system) return interaction.editReply("That leveling system no longer exists.");
+  if (!systemAvailable(interaction.guild.id, "leveling", system.id)) return interaction.editReply("That leveling system is paused until this server has Premium.");
   const user = interaction.options.getUser("member") ?? interaction.user;
   const profileUser = await user.fetch(true).catch(() => user);
   const member = await interaction.guild.members.fetch(user.id).catch(() => null);
@@ -224,6 +225,7 @@ bot.on(Events.InteractionCreate, async interaction => {
     averageXpPerMinute
   };
   const image = await renderLevelCard(cardData);
+  if (!systemAvailable(interaction.guild.id, "leveling", system.id)) return interaction.editReply("That leveling system is paused until this server has Premium.");
   await interaction.editReply({ files: [new AttachmentBuilder(image, { name: `level-${user.id}.png` })] });
   } catch (error) {
     console.error("Interaction failed", error);
