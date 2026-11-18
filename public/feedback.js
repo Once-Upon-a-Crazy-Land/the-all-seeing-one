@@ -3,6 +3,14 @@ const status = document.querySelector('#submit-status');
 const boardStatus = document.querySelector('#board-status');
 let page = 1;
 let loadId = 0;
+let statusTimer;
+function showStatus(message, error = false) {
+  clearTimeout(statusTimer);
+  status.textContent = message;
+  status.classList.toggle('error', error);
+  status.classList.remove('hidden');
+  statusTimer = setTimeout(() => status.classList.add('hidden'), 4000);
+}
 async function api(url, options) {
   const response = await fetch(url, options);
   const data = await response.json();
@@ -47,16 +55,14 @@ form.addEventListener('submit', async event => {
   event.preventDefault();
   const button = form.querySelector('button');
   button.disabled = true;
-  status.classList.remove('error');
-  status.textContent = 'Submitting...';
+  showStatus('Submitting...');
   try {
     await api('/api/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
     form.reset();
-    status.textContent = 'Feedback submitted.';
+    showStatus('Feedback submitted.');
     await loadFeedback(1);
   } catch (error) {
-    status.textContent = error.message;
-    status.classList.add('error');
+    showStatus(error.message, true);
   } finally { button.disabled = false; }
 });
 document.querySelector('#refresh').onclick = () => loadFeedback();
@@ -66,5 +72,5 @@ fetch('/api/me').then(response => {
   if (response.ok) form.hidden = false;
   else if (response.status === 401) document.querySelector('#sign-in').hidden = false;
   else throw new Error('Could not check sign-in. Please refresh to try again.');
-}).catch(() => { status.textContent = 'Could not check sign-in. Please refresh to try again.'; });
+}).catch(() => { showStatus('Could not check sign-in. Please refresh to try again.', true); });
 loadFeedback();

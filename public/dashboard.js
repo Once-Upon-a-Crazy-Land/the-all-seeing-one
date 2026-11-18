@@ -2388,7 +2388,7 @@ function renderPremium(){
   const premium=state.data?.premium;if(!premium)return;
   premiumPanel.classList.remove('hidden');
   $('#premium-label').textContent=premium.active?'Premium active':'Free plan';
-  $('#premium-details').textContent=premium.active?'Up to 10 leveling systems, 10 economy systems, and 30 Creator Alerts. Manage or cancel recurring billing in PayPal.':'Up to 2 leveling systems, 2 economy systems, and 5 Creator Alerts. Premium unlocks 10 systems of each type and 30 Creator Alerts. Extra systems pause when Premium ends and keep their data.';
+  $('#premium-details').textContent=(premium.active?'Up to 10 leveling systems, 10 economy systems, and 30 Creator Alerts. Manage or cancel recurring billing in PayPal.':'Up to 2 leveling systems, 2 economy systems, and 5 Creator Alerts. Premium unlocks 10 systems of each type and 30 Creator Alerts. Extra systems pause when Premium ends and keep their data.')+' Premium subscriptions help support the bot, hosting, and ongoing development.';
   if (creatorAlertView?.guildId === state.guildId && Number.isInteger(premium.creatorAlertLimit)) {
     creatorAlertView.limit = premium.creatorAlertLimit;
     updateCreatorAlertCreationControls();

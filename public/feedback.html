@@ -5,12 +5,16 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Report Bug - Crazyland</title>
   <link rel="icon" type="image/png" href="/images/gear.png">
-  <link rel="stylesheet" href="/feedback.css?v=text-field-scrollbars">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/dashboard.css?v=sidebar-server-name">
+  <link rel="stylesheet" href="/feedback.css?v=dashboard-theme">
+  <script src="/falling-gears.js" defer></script>
   <script src="/feedback.js" defer></script>
 </head>
-<body>
-  <header><a href="/">Crazyland</a><a href="/manage">Back to dashboard</a></header>
-  <main>
+<body class="app has-falling-gears feedback-page">
+  <div class="falling-gears" aria-hidden="true"></div>
+  <header class="feedback-header"><a class="brand" href="/">Crazyland</a><a class="outline" href="/manage">Back to dashboard</a></header>
+  <main class="dash">
     <h1>Bug reports &amp; suggestions</h1>
     <p>Found a problem or have an idea? Share it with the community.</p>
     <section class="card" aria-labelledby="submit-heading">
@@ -23,14 +27,14 @@
         <label>Details<textarea name="description" required maxlength="4000" rows="5" placeholder="Describe what happened and what you expected, or explain your idea."></textarea></label>
         <button class="button" type="submit">Submit feedback</button>
       </form>
-      <p id="submit-status" role="status"></p>
     </section>
     <section aria-labelledby="community-heading">
-      <div class="board-heading"><h2 id="community-heading">Community feedback</h2><button id="refresh" type="button">Refresh</button></div>
+      <div class="board-heading"><h2 id="community-heading">Community feedback</h2><button class="outline" id="refresh" type="button">Refresh</button></div>
       <p id="board-status" role="status">Loading feedback...</p>
       <div id="feedback-list"></div>
-      <nav aria-label="Feedback pages"><button id="previous" disabled>Previous</button><span id="page"></span><button id="next" disabled>Next</button></nav>
+      <nav class="feedback-pagination" aria-label="Feedback pages"><button class="outline" id="previous" disabled>Previous</button><span id="page"></span><button class="outline" id="next" disabled>Next</button></nav>
     </section>
   </main>
+  <div id="submit-status" class="save-state hidden" role="status"></div>
 </body>
 </html>
