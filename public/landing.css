@@ -1,0 +1,792 @@
+@font-face {
+  font-family: Batmos;
+  src: url('/assets/batmos.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+.home-page {
+  --home-gutter: clamp(18px, 4vw, 56px);
+  margin: 0;
+  background: var(--discord-bg);
+  color: var(--discord-text);
+  font-family: 'DM Sans', system-ui, sans-serif;
+}
+
+.home-page .falling-gears {
+  position: absolute;
+  height: 100vh;
+}
+
+html:has(.opening-credits[open]) {
+  overflow: hidden;
+}
+
+.opening-credits[open] {
+  --opening-exit-duration: 560ms;
+  --opening-exit-delay: 3.72s;
+  --opening-exit-easing: cubic-bezier(.7, 0, .3, 1);
+  position: fixed;
+  inset: 0;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--discord-text);
+}
+
+.opening-credits::backdrop {
+  background: transparent;
+}
+
+.opening-scene {
+  --opening-application-delay: 1.2s;
+  --opening-finale-delay: 2.47s;
+  --opening-text-travel: clamp(3rem, 18vw, 10rem);
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  background: var(--discord-bg);
+  animation: opening-fade-out var(--opening-exit-duration) var(--opening-exit-easing) var(--opening-exit-delay) forwards;
+}
+
+.opening-glow {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(ellipse at 50% 46%,
+    color-mix(in srgb, var(--discord-accent) 22%, transparent), transparent 72%);
+  animation: opening-glow-pulse var(--opening-exit-delay) ease-in-out both;
+}
+
+.opening-slide {
+  position: relative;
+  isolation: isolate;
+  grid-area: 1 / 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 16px;
+  padding: clamp(18px, 6vmin, 72px);
+  font-family: Batmos, Georgia, serif;
+  text-align: center;
+}
+
+.opening-slide-studio {
+  --opening-text-from-y: 20px;
+  animation: opening-fade-out 180ms ease-out var(--opening-application-delay) forwards;
+}
+
+.opening-slide-application {
+  --opening-text-from-x: var(--opening-text-travel);
+  --opening-text-delay: var(--opening-application-delay);
+  animation: opening-fade-out 180ms ease-out var(--opening-finale-delay) forwards;
+}
+
+.opening-slide-finale {
+  --opening-text-from-x: calc(-1 * var(--opening-text-travel));
+  --opening-text-delay: var(--opening-finale-delay);
+}
+
+.opening-slide p {
+  display: grid;
+  gap: .35em;
+  margin: 0;
+  animation: opening-text-in 560ms cubic-bezier(.48, .04, .35, 1) var(--opening-text-delay, 0s) both;
+}
+
+.opening-slide strong {
+  color: var(--discord-accent);
+  font-size: clamp(2.5rem, min(13vw, 16vh), 8.75rem);
+  font-weight: 400;
+  line-height: 1.08;
+  letter-spacing: .025em;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+.opening-slide p span {
+  font-size: clamp(1rem, min(4vw, 6vh), 1.75rem);
+  line-height: 1.15;
+  letter-spacing: .12em;
+}
+
+.opening-slide-finale strong {
+  justify-self: center;
+  font-size: clamp(3rem, min(22vw, 35vh), 19rem);
+  line-height: 1;
+  text-shadow: 0 0 28px color-mix(in srgb, var(--discord-accent) 33%, transparent);
+}
+
+.opening-credits.is-handing-off .opening-slide-finale .home-wordmark,
+.opening-credits[open].is-handing-off ~ main #home-heading {
+  opacity: 0;
+}
+
+.opening-title-flight {
+  position: absolute;
+  z-index: 1;
+  width: max-content;
+  white-space: nowrap;
+  text-shadow: 0 0 28px color-mix(in srgb, var(--discord-accent) 33%, transparent);
+  transform-origin: top left;
+  pointer-events: none;
+  animation: opening-title-land var(--opening-exit-duration) var(--opening-exit-easing) both;
+}
+
+.opening-skip {
+  position: absolute;
+  z-index: 2;
+  right: max(24px, env(safe-area-inset-right));
+  bottom: max(24px, env(safe-area-inset-bottom));
+  animation: opening-fade-out var(--opening-exit-duration) var(--opening-exit-easing) var(--opening-exit-delay) forwards;
+}
+
+@keyframes opening-text-in {
+  from {
+    transform: translate(var(--opening-text-from-x, 0px), var(--opening-text-from-y, 0px));
+    opacity: 0;
+  }
+
+  20% { opacity: 0; }
+  to { transform: translate(0, 0); opacity: 1; }
+}
+
+@keyframes opening-glow-pulse {
+  0%, 28% { opacity: .64; }
+  34% { opacity: .4; }
+  49%, 62% { opacity: .82; }
+  68% { opacity: .46; }
+  83%, 100% { opacity: 1; }
+}
+
+@keyframes opening-title-land {
+  to { transform: translate(var(--title-x), var(--title-y)) scale(var(--title-scale)); }
+}
+
+@keyframes opening-fade-out {
+  to { opacity: 0; }
+}
+
+.home-shell {
+  max-width: 1440px;
+  margin-inline: auto;
+  padding-inline: var(--home-gutter);
+}
+
+.home-page a:focus-visible,
+.opening-skip button:focus-visible {
+  outline: 2px solid var(--discord-accent);
+  outline-offset: 3px;
+}
+
+.home-skip {
+  position: fixed;
+  z-index: 2;
+  top: 12px;
+  left: 12px;
+  padding: 10px 16px;
+  border-radius: 4px;
+  background: var(--discord-surface);
+  color: var(--discord-text);
+  transform: translateY(calc(-100% - 20px));
+}
+
+.home-skip:focus {
+  transform: none;
+}
+
+.home-header {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: clamp(20px, 4vw, 56px);
+  min-height: 82px;
+  border-bottom: 1px solid var(--discord-border);
+  background: var(--discord-surface);
+}
+
+.home-header .home-button {
+  justify-self: end;
+}
+
+.home-brand {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 10px;
+  color: var(--discord-text);
+  font-size: .875rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.home-nav,
+.home-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px clamp(16px, 2.5vw, 32px);
+  color: var(--discord-muted);
+  font-size: .875rem;
+}
+
+.home-nav a,
+.home-footer nav a {
+  padding-block: 8px;
+}
+
+.home-nav a {
+  border-bottom: 2px solid transparent;
+  font-weight: 600;
+}
+
+.home-nav a:hover,
+.home-nav a:focus-visible {
+  border-bottom-color: var(--discord-accent);
+  color: var(--discord-text);
+}
+
+.home-footer nav a:hover {
+  color: var(--discord-accent);
+}
+
+.home-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--discord-accent);
+  color: #111214;
+  font: 700 .875rem 'DM Sans', system-ui, sans-serif;
+  cursor: pointer;
+  transition: background-color .15s ease;
+}
+
+.home-button:hover {
+  background: var(--discord-accent-hover);
+}
+
+.home-hero {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, .97fr);
+  align-items: center;
+  gap: clamp(36px, 6vw, 96px);
+  min-height: 585px;
+  padding-block: clamp(76px, 9vw, 136px);
+  background: radial-gradient(ellipse at 24% 43%,
+      color-mix(in srgb, var(--discord-accent) 14%, transparent), transparent 58%),
+    radial-gradient(ellipse at 80% 65%, var(--discord-surface), transparent 56%);
+}
+
+.sparkle-layer,
+.cursor-sparkles {
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.sparkle-layer {
+  position: absolute;
+  z-index: -1;
+}
+
+.cursor-sparkles {
+  position: fixed;
+  z-index: 4;
+}
+
+.opening-credits .cursor-sparkles {
+  position: absolute;
+}
+
+.cursor-sparkles::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50px;
+  aspect-ratio: 1;
+  background: radial-gradient(circle,
+    color-mix(in srgb, var(--discord-accent) 12%, transparent),
+    color-mix(in srgb, var(--discord-accent) 4%, transparent) 36%, transparent 70%);
+  opacity: 0;
+  transform: translate3d(var(--cursor-x, 0px), var(--cursor-y, 0px), 0) translate(-50%, -50%);
+  transition: opacity .32s ease-out;
+  content: '';
+}
+
+.cursor-sparkles.has-cursor::before {
+  opacity: 1;
+  transition-duration: .12s;
+}
+
+.sparkle {
+  position: absolute;
+  top: var(--sparkle-y);
+  left: var(--sparkle-x);
+  width: var(--sparkle-size);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: #ffd1d8;
+  box-shadow: 0 0 7px 1px #f4a2c080;
+  opacity: 0;
+  animation: sparkle-drift var(--sparkle-duration) linear var(--sparkle-delay) infinite;
+}
+
+.sparkle-warm {
+  background: #fff0cf;
+  box-shadow: 0 0 7px 1px #ffceab70;
+}
+
+.sparkle-glint::after {
+  position: absolute;
+  inset: -85%;
+  background: #fff2e8;
+  clip-path: polygon(50% 0, 60% 39%, 100% 50%, 60% 61%, 50% 100%, 40% 61%, 0 50%, 40% 39%);
+  content: '';
+}
+
+@keyframes sparkle-drift {
+  from { opacity: 0; transform: translate(0, 8px) scale(.45); }
+  18% { opacity: var(--sparkle-brightness); }
+  38% { opacity: calc(var(--sparkle-brightness) * .45); }
+  54% { opacity: var(--sparkle-brightness); }
+  80% { opacity: 0; }
+  to { opacity: 0; transform: translate(var(--sparkle-drift), var(--sparkle-rise)) scale(.8); }
+}
+
+.cursor-sparkles .sparkle {
+  animation: cursor-sparkle-fade var(--sparkle-duration) ease-out forwards;
+}
+
+@keyframes cursor-sparkle-fade {
+  from {
+    opacity: var(--sparkle-brightness);
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--sparkle-drift)), calc(-50% + var(--sparkle-rise))) scale(.5);
+  }
+}
+
+.home-intro {
+  min-width: 0;
+}
+
+.home-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 23px;
+  color: var(--discord-muted);
+  font-size: .75rem;
+  font-weight: 800;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.home-eyebrow::before {
+  width: 28px;
+  height: 2px;
+  background: var(--discord-accent);
+  content: '';
+}
+
+.home-wordmark {
+  margin: 0;
+  color: var(--discord-accent);
+  font-family: Batmos, Georgia, serif;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: .025em;
+  overflow-wrap: anywhere;
+}
+
+.home-hero .home-wordmark {
+  width: max-content;
+  max-width: 100%;
+  font-size: clamp(4rem, 10.4vw, 9.5rem);
+  text-shadow: 0 0 18px color-mix(in srgb, var(--discord-accent) 20%, transparent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @supports (background-clip: text) {
+    .opening-slide-finale .home-wordmark,
+    .home-hero .home-wordmark {
+      background-image: linear-gradient(105deg, var(--discord-accent) 38%, #ffd0da 46%,
+        #fff0dc 50%, #ffd1df 54%, var(--discord-accent) 62%);
+      background-size: 300% 100%;
+      background-position: 100% 50%;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .opening-slide-finale .home-wordmark {
+      animation: title-flow 940ms ease-in-out 2.92s both;
+    }
+
+    .home-hero .home-wordmark {
+      animation: title-flow 7s ease-in-out infinite;
+    }
+
+    .opening-credits[open] ~ main .home-hero .home-wordmark {
+      animation-play-state: paused;
+    }
+  }
+}
+
+@keyframes title-flow {
+  0%, 12% { background-position: 100% 50%; }
+  62%, 100% { background-position: 0% 50%; }
+}
+
+.home-tagline {
+  margin: 26px 0 0;
+  font-family: Manrope, 'DM Sans', system-ui, sans-serif;
+  font-size: clamp(1.5rem, 3vw, 2.75rem);
+  font-weight: 800;
+  line-height: 1.12;
+  letter-spacing: -.045em;
+}
+
+.home-tagline em {
+  color: var(--discord-accent);
+  font-family: Georgia, serif;
+  font-style: normal;
+  font-weight: 400;
+  letter-spacing: -.06em;
+}
+
+.home-lede {
+  max-width: 35rem;
+  margin: 14px 0 0;
+  color: var(--discord-muted);
+  font-size: clamp(1rem, 1.45vw, 1.1875rem);
+  line-height: 1.65;
+}
+
+.home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 28px;
+  margin-top: 30px;
+}
+
+.home-text-link {
+  color: var(--discord-accent);
+  font-size: .9375rem;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 5px;
+}
+
+.home-text-link:hover {
+  color: var(--discord-text);
+}
+
+.home-preview {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--discord-border);
+  border-radius: 4px;
+  background: var(--discord-surface);
+}
+
+.preview-channel {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 16px;
+  padding: 14px 19px;
+  border-bottom: 1px solid var(--discord-border);
+  background: var(--discord-surface-raised);
+  color: var(--discord-muted);
+  font-size: .8125rem;
+}
+
+.preview-channel span:first-child {
+  color: var(--discord-text);
+  font-weight: 700;
+}
+
+.preview-channel span[aria-hidden] {
+  margin-right: 3px;
+  color: var(--discord-accent);
+}
+
+.preview-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: clamp(16px, 2vw, 30px);
+}
+
+.preview-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.preview-author {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  padding-top: 3px;
+}
+
+.preview-author span {
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: #4450bd;
+  color: #fff;
+  font-size: .625rem;
+  font-weight: 800;
+}
+
+.preview-wallet {
+  margin-top: 9px;
+  padding: 16px clamp(12px, 1.7vw, 22px);
+  border: 1px solid var(--discord-border);
+  border-left: 4px solid var(--discord-accent);
+  border-radius: 4px;
+  background: var(--discord-input);
+}
+
+.preview-wallet-title,
+.preview-total {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preview-wallet-title strong {
+  overflow-wrap: anywhere;
+}
+
+.preview-wallet hr {
+  margin-block: 12px;
+  border: 0;
+  border-top: 1px solid var(--discord-border);
+}
+
+.preview-balances {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 12px;
+  margin: 0;
+}
+
+.preview-balances dt {
+  color: var(--discord-muted);
+  font-size: .8125rem;
+  font-weight: 700;
+}
+
+.preview-balances dd {
+  margin: 3px 0 0;
+  color: var(--discord-muted);
+  font-size: .75rem;
+}
+
+.preview-balances .preview-total {
+  color: var(--discord-text);
+  font-size: .9375rem;
+  font-weight: 800;
+}
+
+.home-features {
+  padding-block: clamp(52px, 7vw, 90px);
+  border-block: 1px solid var(--discord-border);
+}
+
+.home-features h2,
+.home-setup h2 {
+  margin: 0;
+  color: var(--discord-accent);
+  font-family: Manrope, 'DM Sans', system-ui, sans-serif;
+  font-size: clamp(2rem, 4.2vw, 3.5rem);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -.055em;
+}
+
+.home-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.home-feature {
+  padding: clamp(18px, 2.5vw, 28px);
+  border: 1px solid var(--discord-border);
+  border-radius: 4px;
+  background: var(--discord-surface);
+  scroll-margin-top: 18px;
+}
+
+.home-feature:target {
+  border-color: var(--discord-accent);
+}
+
+.home-feature-icon {
+  display: block;
+  object-fit: contain;
+}
+
+.home-feature h3 {
+  margin: 17px 0 6px;
+  color: var(--discord-accent);
+  font-size: clamp(1.25rem, 2.2vw, 1.75rem);
+  line-height: 1.2;
+  letter-spacing: -.035em;
+}
+
+.home-feature p,
+.home-setup p {
+  max-width: 58ch;
+  margin: 0;
+  color: var(--discord-muted);
+  line-height: 1.65;
+}
+
+.home-setup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding-block: clamp(46px, 6vw, 74px);
+}
+
+.home-setup p {
+  margin-top: 10px;
+}
+
+.home-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 26px;
+  padding-block: 20px;
+  border-top: 1px solid var(--discord-border);
+  background: var(--discord-surface);
+  color: inherit;
+  font: inherit;
+  letter-spacing: normal;
+}
+
+@media (max-width: 980px) {
+  .home-hero {
+    gap: 36px;
+    padding-block: 80px;
+  }
+
+  .preview-message {
+    gap: 9px;
+  }
+
+  .preview-avatar {
+    width: 30px;
+    height: 30px;
+  }
+}
+
+@media (max-width: 760px) {
+  .home-header {
+    grid-template-columns: 1fr auto;
+    gap: 9px 14px;
+    padding-block: 13px 8px;
+  }
+
+  .home-nav {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    justify-content: space-between;
+    width: min(100%, 25rem);
+  }
+
+  .home-hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 40px;
+    min-height: auto;
+    padding-block: 58px;
+  }
+
+  .home-hero .home-wordmark {
+    font-size: clamp(3.75rem, 19vw, 8rem);
+  }
+
+  .sparkle-layer .sparkle:nth-child(n + 31) {
+    display: none;
+  }
+
+  .home-preview {
+    max-width: 550px;
+  }
+}
+
+@media (max-width: 480px) {
+  .home-brand {
+    gap: 7px;
+    font-size: .75rem;
+  }
+
+  .home-header .home-button {
+    padding-inline: 11px;
+    font-size: .8125rem;
+  }
+
+  .home-feature-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 360px) {
+  .home-nav {
+    gap: 4px 12px;
+    font-size: .8125rem;
+  }
+
+  .preview-message {
+    padding: 13px 11px;
+  }
+
+  .preview-avatar {
+    width: 24px;
+    height: 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:has(.home-page) {
+    scroll-behavior: auto;
+  }
+
+  .home-button {
+    transition: none;
+  }
+
+  .sparkle-layer,
+  .cursor-sparkles {
+    display: none;
+  }
+}

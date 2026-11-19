@@ -462,18 +462,6 @@
 
 /* Discord Developer Portal-inspired dashboard theme */
 .app {
-  --discord-bg: #1e1f22;
-  --discord-sidebar: #16171a;
-  --discord-surface: #2b2d31;
-  --discord-surface-raised: #313338;
-  --discord-input: #1e1f22;
-  --discord-hover: #3a3c43;
-  --discord-border: #42444a;
-  --discord-text: #f2f3f5;
-  --discord-muted: #b5bac1;
-  --discord-faint: #949ba4;
-  --discord-accent: #f45f77;
-  --discord-accent-hover: #d94f67;
   background: var(--discord-bg);
   color: var(--discord-text);
   overflow-x: hidden;
