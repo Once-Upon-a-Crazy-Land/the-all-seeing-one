@@ -19,7 +19,7 @@ async function api(url, options) {
 }
 async function loadFeedback(target = page) {
   const id = ++loadId;
-  boardStatus.textContent = 'Loading feedback...';
+  boardStatus.textContent = '';
   boardStatus.classList.remove('error');
   try {
     const result = await api(`/api/feedback?page=${target}`);
@@ -55,7 +55,8 @@ form.addEventListener('submit', async event => {
   event.preventDefault();
   const button = form.querySelector('button');
   button.disabled = true;
-  showStatus('Submitting...');
+  clearTimeout(statusTimer);
+  status.classList.add('hidden');
   try {
     await api('/api/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
     form.reset();

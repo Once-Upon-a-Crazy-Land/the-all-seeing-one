@@ -1276,9 +1276,7 @@ label small {
 
 .loading-indicator {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
+  justify-content: center;
 }
 
 .loading-spinner {
@@ -2697,7 +2695,7 @@ textarea { scrollbar-width: none; }
 .creator-platform-color .embed-accent-row { flex-wrap: wrap; }
 #creator-alert-fields .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 #creator-alert-preview-status:not(:empty):has(+ #creator-alert-preview-author:not(.hidden)) { margin-bottom: 8px; }
-#creator-alert-preview-status:empty { display: none; }
+:is(#creator-alert-preview-status, #creator-alert-status, #automod-status):empty { display: none; }
 #creator-alert-preview-author:not(.hidden) { margin-bottom: 8px; }
 .embed-field .form-grid { align-items: start; }
 #embed-composer .embed-composer-field .form-grid { grid-template-columns: minmax(0, 1fr); }

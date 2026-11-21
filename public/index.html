@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/landing.css">
   <script type="module" src="/opening-credits.js"></script>
   <script type="module" src="/sparkles.js"></script>
+  <script type="module" src="/home-previews.js"></script>
   <script src="/falling-gears.js" defer></script>
 </head>
 <body class="home-page has-falling-gears">
@@ -59,45 +60,50 @@
       <div class="home-intro">
         <p class="home-eyebrow">A community bot for Discord</p>
         <h1 class="home-wordmark" id="home-heading">Rabarbarard</h1>
-        <p class="home-tagline">Your server. <em>Your rules.</em></p>
-        <p class="home-lede">Reward activity with XP, roles, and custom currencies. Set up moderation, welcome cards, and creator alerts from one dashboard.</p>
-        <div class="home-actions">
-          <a class="home-button" href="/invite">Add to Discord <span aria-hidden="true">&rarr;</span></a>
-          <a class="home-text-link" href="#features">Explore features</a>
-        </div>
       </div>
 
-      <figure class="home-preview">
-        <figcaption class="preview-channel">
-          <span><span aria-hidden="true">#</span> rewards</span>
-          <span>Example wallet</span>
-        </figcaption>
-        <div class="preview-message">
-          <img class="preview-avatar" src="/images/gears.png" width="42" height="42" alt="">
-          <div class="preview-content">
-            <div class="preview-author"><strong>Rabarbarard</strong> <span>APP</span></div>
-            <div class="preview-wallet">
-              <div class="preview-wallet-title">
-                <img src="/images/gears.png" width="25" height="25" alt="">
-                <strong>wobblingbottom's wallet</strong>
+      <div class="home-showcase">
+        <div class="preview-tabs" hidden role="tablist" aria-label="Bot feature categories"></div>
+        <span class="preview-announcement" aria-live="polite"></span>
+        <div class="preview-stage" id="bot-example">
+          <div class="preview-effects" aria-hidden="true"></div>
+          <div class="preview-example">
+            <figure class="home-preview">
+              <figcaption class="preview-channel">
+                <span class="preview-channel-label"><span data-preview-channel-mark aria-hidden="true">#</span> <span data-preview-channel>rewards</span></span>
+                <span data-preview-caption>Example wallet</span>
+              </figcaption>
+              <div class="preview-message">
+                <img class="preview-avatar" src="/images/gears.png" width="42" height="42" alt="">
+                <div class="preview-content">
+                  <div class="preview-author"><strong>Rabarbarard</strong> <span>APP</span></div>
+                  <div class="preview-panel">
+                    <div class="preview-embed">
+                      <div class="preview-embed-title">
+                        <img src="/images/gears.png" width="25" height="25" alt="">
+                        <strong>wobblingbottom's wallet</strong>
+                      </div>
+                      <hr>
+                      <dl class="preview-balances">
+                        <div>
+                          <dt>Main economy</dt>
+                          <dd class="preview-total"><img src="/images/gear.png" width="22" height="22" alt=""> 596 Gear</dd>
+                          <dd>Cash 586 &middot; Bank 10</dd>
+                        </div>
+                        <div>
+                          <dt>Event currency</dt>
+                          <dd class="preview-total"><img src="/images/gears.png" width="22" height="22" alt=""> 50 Gongs</dd>
+                          <dd>Cash 50 &middot; Bank 0</dd>
+                        </div>
+                      </dl>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <hr>
-              <dl class="preview-balances">
-                <div>
-                  <dt>Main economy</dt>
-                  <dd class="preview-total"><img src="/images/gear.png" width="22" height="22" alt=""> 596 Gear</dd>
-                  <dd>Cash 586 &middot; Bank 10</dd>
-                </div>
-                <div>
-                  <dt>Event currency</dt>
-                  <dd class="preview-total"><img src="/images/gears.png" width="22" height="22" alt=""> 50 Gongs</dd>
-                  <dd>Cash 50 &middot; Bank 0</dd>
-                </div>
-              </dl>
-            </div>
+            </figure>
           </div>
         </div>
-      </figure>
+      </div>
     </section>
 
     <section class="home-features" id="features" aria-labelledby="features-heading">
@@ -126,14 +132,6 @@
           </article>
         </div>
       </div>
-    </section>
-
-    <section class="home-setup home-shell" aria-labelledby="setup-heading">
-      <div>
-        <h2 id="setup-heading">Set up your server</h2>
-        <p>Sign in with Discord, choose a server you manage, and configure the features you want to use.</p>
-      </div>
-      <a class="home-button" href="/auth/discord">Open dashboard <span aria-hidden="true">&rarr;</span></a>
     </section>
   </main>
 

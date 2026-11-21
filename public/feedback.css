@@ -21,6 +21,7 @@
 .board-heading, .feedback-pagination { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .board-heading h2 { margin: 0; font-size: 19px; color: var(--discord-text); }
 #board-status, .feedback-pagination { color: var(--discord-muted); font-size: 12px; }
+#board-status:empty { display: none; }
 .feedback-meta { font-size: 12px; color: var(--discord-faint); }
 .feedback-details { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--discord-muted); }
 .feedback-page .card h3 { overflow-wrap: anywhere; margin: 12px 0; font-size: 16px; }

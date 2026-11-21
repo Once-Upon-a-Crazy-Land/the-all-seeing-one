@@ -61,7 +61,8 @@ function renderModuleStatuses(){
   });
   document.querySelectorAll('[data-module-status]').forEach(badge=>{
     const enabled=statuses[badge.dataset.moduleStatus];
-    badge.textContent=data?(enabled?'Enabled':'Disabled'):'Loading';
+    badge.textContent=data?(enabled?'Enabled':'Disabled'):'';
+    badge.hidden=!data;
     badge.classList.toggle('is-enabled',!!data&&enabled);
   });
 }
@@ -345,7 +346,7 @@ async function showCreatorAlertPreview(view, id) {
 
   const pending = new AbortController();
   view.previewRequest = pending;
-  creatorPreviewStatus.textContent = 'Loading preview...';
+  creatorPreviewStatus.textContent = '';
   try {
     const { message, name, avatar, notice } = await request(
       `/api/guilds/${view.guildId}/creator-alerts/${id}/preview`, { signal: pending.signal }
@@ -563,7 +564,6 @@ async function loadCreatorAlerts() {
   creatorAlertSaved.replaceChildren(new Option('Select a saved alert', ''));
   selectCreatorAlert(view);
   $('#creator-alert-preview').classList.add('hidden');
-  creatorAlertStatus.textContent = 'Loading accounts...';
   try {
     const data = await request(`/api/guilds/${view.guildId}/creator-alerts`);
     if (creatorAlertView !== view || state.guildId !== view.guildId) return;
@@ -713,7 +713,7 @@ async function loadAutoRoles() {
   autoRolesData = undefined;
   autoRoleAdd.disabled = true;
   autoRoleList.replaceChildren();
-  autoRoleStatus.textContent = 'Loading roles...';
+  autoRoleStatus.textContent = '';
   try {
     const data = await request(autoRolesUrl(guildId));
     if (version !== autoRolesVersion || guildId !== state.guildId) return;
@@ -805,7 +805,7 @@ function loadWelcomePreview() {
   const src = `/api/guilds/${state.guildId}/tools/welcome/preview`;
   if (preview.getAttribute('src') === src && !preview.classList.contains('hidden')) return;
   preview.classList.add('hidden');
-  previewStatus.textContent = 'Loading preview...';
+  previewStatus.textContent = '';
   preview.src = src;
 }
 
@@ -821,7 +821,7 @@ const memberCardLoaders = ['welcome', 'goodbye'].map(kind => {
     const guildId = state.guildId;
     const load = ++loadVersion;
     channelSelect.disabled = true;
-    channelSelect.replaceChildren(new Option('Loading channels...', ''));
+    channelSelect.replaceChildren(new Option('Select a channel', ''));
     try {
       const { channelId, channels } = await request(settingsUrl(guildId));
       if (load !== loadVersion || guildId !== state.guildId) return;
@@ -1214,7 +1214,7 @@ async function loadEmbedChannels() {
   const selected = embedChannels.value;
   embedChannelError = '';
   embedChannels.disabled = true;
-  embedChannels.replaceChildren(new Option('Loading channels...', ''));
+  embedChannels.replaceChildren(new Option('Select a channel', ''));
   try {
     const { channels, saved } = await request(embedUrl(guildId));
     if (load !== embedChannelLoad || guildId !== state.guildId) return;
@@ -2272,7 +2272,7 @@ async function loadAutoMod(){
   closeAutoModRule();
   renderAutoModRules();
   autoModFields.disabled=false;
-  autoModStatus.textContent='Loading rules…';
+  autoModStatus.textContent='';
   const options=entries=>entries.map(entry=>new Option(entry.name,entry.id));
   $('#automod-roles').replaceChildren(new Option('Select roles',''),...options(state.data.roles));
   $('#automod-channels').replaceChildren(new Option('Select channels',''),...options(state.data.ruleChannels||state.data.channels));

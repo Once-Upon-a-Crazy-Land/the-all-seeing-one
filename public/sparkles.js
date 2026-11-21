@@ -2,6 +2,7 @@ const layers = document.querySelectorAll('.sparkle-layer');
 const credits = document.querySelector('.opening-credits');
 const creditsTrail = credits?.querySelector('.cursor-sparkles');
 const pageTrail = document.querySelector('.home-page > .cursor-sparkles');
+const previewEffects = document.querySelector('.preview-effects');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const creditsGlow = { x: 50, y: 58, spreadX: 39, spreadY: 39 };
 const titleGlow = { x: 25, y: 54, spreadX: 24, spreadY: 39 };
@@ -54,6 +55,7 @@ function updateSparkles() {
   if (reducedMotion.matches) {
     window.clearTimeout(glowTimeout);
     clearTrail(pageTrail);
+    previewEffects?.replaceChildren();
   }
   if (reducedMotion.matches || !credits?.open) clearTrail(creditsTrail);
 
@@ -129,6 +131,35 @@ function burstSparkles(event) {
       rise: Math.sin(angle) * distance - 4
     });
   }
+}
+
+export function playPreviewSparkles(layer) {
+  if (reducedMotion.matches) return;
+
+  const glow = document.createElement('div');
+  glow.className = 'preview-glow';
+  glow.addEventListener('animationend', () => {
+    if (glow.parentElement === layer) layer.replaceChildren();
+  }, { once: true });
+
+  const particles = document.createDocumentFragment();
+  const directions = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  for (const [outX, outY] of directions) {
+    const count = outY ? 5 : 3;
+    for (let index = 0; index < count; index++) {
+      const position = 10 + 80 * index / (count - 1) + randomBetween(-3, 3);
+      const distance = randomBetween(20, 42);
+      const sway = randomBetween(-10, 10);
+      particles.append(makeSparkle(particles.childElementCount, {
+        x: (outX ? (outX + 1) * 50 : position) + '%',
+        y: (outY ? (outY + 1) * 50 : position) + '%',
+        duration: randomBetween(.49, .82),
+        drift: outX * distance + outY * sway,
+        rise: outY * distance + outX * sway
+      }));
+    }
+  }
+  layer.replaceChildren(glow, particles);
 }
 
 updateSparkles();
