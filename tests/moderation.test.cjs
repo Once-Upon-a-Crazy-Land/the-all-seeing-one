@@ -69,7 +69,7 @@ test('honeypot validation accepts text and announcement channels and refreshes p
 const source = ts.transpileModule(fs.readFileSync('src/moderation.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 function setup() {
   const db = new DatabaseSync(':memory:');
-  const context = { exports: {}, require: name => name === 'discord.js' ? discord : name === './log-webhooks.js' ? { sendLog: (_guild, channel, _kind, payload) => channel.send(payload) } : { db }, URL, console: { error() {} } };
+  const context = { exports: {}, require: name => name === 'discord.js' ? discord : name === './log-webhooks.js' ? { sendLog: (_guild, channel, _kind, payload) => channel.send(payload) } : { db }, URL, setTimeout, clearTimeout, console: { error() {} } };
   vm.createContext(context); vm.runInContext(source, context);
   const events = [], responses = [];
   let actorAllowed = true, botAllowed = true, dmFails = false, targetError = null, higherRole = false;
@@ -78,6 +78,7 @@ function setup() {
   const target = { roles: { highest: {} }, moderatable: true, kickable: true, bannable: true, timeout: async value => events.push(['timeout', value]), kick: async () => events.push(['kick']) };
   const me = { id: '333333333333333333', permissions: { has: () => botAllowed }, roles: { highest: { comparePositionTo: () => 1 } } };
   const guild = { id: '444444444444444444', name: 'Server', ownerId: '555555555555555555', members: { fetch: async id => { if (id === actor.id) return actor; if (targetError) throw targetError; return target; }, fetchMe: async () => me, ban: async (_id, options) => events.push(['ban', options]) }, bans: { remove: async () => events.push(['unban']) }, channels: { fetch: async () => ({ isSendable: () => true, send: async payload => events.push(['log', payload]) }) } };
+  actor.guild = guild;
   function interaction(action, fields = {}, type = 'modal') {
     return { commandName: 'mod', customId: `moderation:${action}:${actor.id}`, guild, guildId: guild.id, user: { id: actor.id, tag: 'Moderator' }, memberPermissions: actor.permissions, deferred: false,
       isButton: () => type === 'button', isStringSelectMenu: () => type === 'select', isModalSubmit: () => type === 'modal',
@@ -96,6 +97,7 @@ const content = payload => payload.components ? payload.components.flatMap(c => 
 
 function menuInteraction(h, name, message) {
   const interaction = h.interaction('', {}, 'command');
+  interaction.id = discord.SnowflakeUtil.generate().toString();
   interaction.commandName = name;
   interaction.isMessageContextMenuCommand = () => !!message;
   interaction.targetMessage = message;
@@ -104,7 +106,7 @@ function menuInteraction(h, name, message) {
   return interaction;
 }
 
-test('message and member Apps commands open private moderation flows and show evidence links in modlogs', async () => {
+test('message and member Apps commands show the selected text in private modlogs', async () => {
   const h = setup();
   const commands = h.api.moderationCommands.map(command => command.toJSON());
   const defaultPermissions = type => Object.fromEntries(Array.from(commands.filter(command => command.type === type),
@@ -117,12 +119,23 @@ test('message and member Apps commands open private moderation flows and show ev
     Modlogs: ModerateMembers, Timeout: ModerateMembers, Warn: ModerateMembers, Kick: KickMembers,
     Softban: BanMembers, Ban: BanMembers, 'Clear Warning': ModerateMembers
   });
-  const message = { id: '777777777777777777', author: h.user };
+  const message = { id: '777777777777777777', author: h.user, content: 'Original text\nwith **formatting** and ```code```' };
   const channelId = '666666666666666666';
+  let canReadHistory = true;
+  let messageReads = 0;
+  h.guild.channels.fetch = async id => {
+    assert.equal(id, channelId);
+    return {
+      isTextBased: () => true, type: discord.ChannelType.GuildText,
+      permissionsFor: viewer => { assert.equal(viewer, h.actor); return { has: () => canReadHistory }; },
+      messages: { fetch: async () => { messageReads++; throw Error('Message deleted'); } }
+    };
+  };
   for (const [label, action] of [['Warn', 'warn'], ['Timeout', 'timeout'], ['Kick', 'kick'], ['Softban', 'softban'], ['Ban', 'ban']]) {
-    assert.equal(await h.api.handleModerationContextCommand(menuInteraction(h, label, message)), true);
+    const menu = menuInteraction(h, label, message);
+    assert.equal(await h.api.handleModerationContextCommand(menu), true);
     const modal = h.events.at(-1)[1];
-    assert.equal(modal.custom_id, `moderation:${action}:${h.actor.id}:${h.user.id}:${message.id}`);
+    assert.equal(modal.custom_id, `moderation:${action}:${h.actor.id}:${h.user.id}:${message.id}:${BigInt(menu.id).toString(36)}`);
     assert(!modal.components.some(component => ['action', 'member', 'message-links'].includes(component.component?.custom_id)));
   }
   assert.equal(await h.api.handleModerationContextCommand(menuInteraction(h, 'Mod', message)), false);
@@ -143,8 +156,9 @@ test('message and member Apps commands open private moderation flows and show ev
     assert.equal(submit.replyFlags, discord.MessageFlags.Ephemeral);
   }
   await submitMessageAction('Warn', message, { reason: 'Linked warning' });
-  const row = h.db.prepare('SELECT id,user_id,message_links FROM moderation_cases').get();
+  const row = h.db.prepare('SELECT id,user_id,message_links,message_text FROM moderation_cases').get();
   assert.equal(row.user_id, h.user.id);
+  assert.equal(row.message_text, message.content);
   const messageUrl = `https://discord.com/channels/${h.guild.id}/${channelId}/${message.id}`;
   assert.deepEqual(JSON.parse(row.message_links), [messageUrl]);
   assert.match(content(h.events.find(event => event[0] === 'dm')[1]), /Linked warning/);
@@ -152,8 +166,19 @@ test('message and member Apps commands open private moderation flows and show ev
   const logs = menuInteraction(h, 'Modlogs');
   await h.api.handleModerationContextCommand(logs);
   assert.equal(logs.replyFlags, discord.MessageFlags.Ephemeral);
-  assert.match(content(h.responses.at(-1)), /Linked warning/);
-  assert(content(h.responses.at(-1)).includes(`[View message](${messageUrl})`));
+  const modlogs = content(h.responses.at(-1));
+  assert.match(modlogs, /Linked warning/);
+  assert.match(modlogs, /Original text\nwith \*\*formatting\*\* and/);
+  assert.equal(modlogs.match(/```/g).length, 2);
+  assert(!modlogs.includes(messageUrl));
+  assert.equal(messageReads, 0);
+  assert(!('message_text' in h.api.moderationCases(h.guild.id)[0]));
+
+  canReadHistory = false;
+  await h.api.handleModerationContextCommand(menuInteraction(h, 'Modlogs'));
+  assert(!content(h.responses.at(-1)).includes('Original text'));
+  assert.equal(messageReads, 0);
+  canReadHistory = true;
 
   await h.api.handleModerationContextCommand(menuInteraction(h, 'Clear Warning'));
   const clear = h.interaction('', { 'case-number': String(row.id) });
@@ -165,9 +190,10 @@ test('message and member Apps commands open private moderation flows and show ev
   for (const [label, action] of [['Timeout', 'timeout'], ['Kick', 'kick'], ['Softban', 'softban'], ['Ban', 'ban']]) {
     const selectedMessage = { ...message, id: (BigInt(message.id) + BigInt(label.length)).toString() };
     await submitMessageAction(label, selectedMessage, { minutes: '10' });
-    const record = h.db.prepare('SELECT user_id, message_links FROM moderation_cases WHERE action=?').get(action);
+    const record = h.db.prepare('SELECT user_id, message_links, message_text FROM moderation_cases WHERE action=?').get(action);
     assert.equal(record.user_id, h.user.id);
     assert.deepEqual(JSON.parse(record.message_links), [`https://discord.com/channels/${h.guild.id}/${channelId}/${selectedMessage.id}`]);
+    assert.equal(record.message_text, selectedMessage.content);
   }
 
   h.setActor(false);
@@ -179,6 +205,53 @@ test('message and member Apps commands open private moderation flows and show ev
   assert.equal(h.responses.at(-1).flags, discord.MessageFlags.IsComponentsV2 | discord.MessageFlags.Ephemeral);
   await h.api.handleModerationContextCommand(menuInteraction(h, 'Softban'));
   assert.equal(h.responses.at(-1).flags, discord.MessageFlags.IsComponentsV2 | discord.MessageFlags.Ephemeral);
+  h.db.close();
+});
+
+test('modlogs read older link-only cases and respect private thread membership', async () => {
+  const h = setup();
+  const channelId = '666666666666666666';
+  const messageId = '777777777777777777';
+  const url = `https://discord.com/channels/${h.guild.id}/${channelId}/${messageId}`;
+  h.db.prepare('INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at,message_links) VALUES (?,?,?,?,?,?,?)')
+    .run(h.guild.id, h.user.id, h.actor.id, 'warn', 'Old warning', new Date().toISOString(), JSON.stringify([url]));
+  let joined = false;
+  let sourceText = 'Text from the old case';
+  let messageReads = 0;
+  h.guild.channels.fetch = async id => {
+    assert.equal(id, channelId);
+    return {
+      isTextBased: () => true, type: discord.ChannelType.PrivateThread,
+      permissionsFor: () => new discord.PermissionsBitField([discord.PermissionFlagsBits.ViewChannel, discord.PermissionFlagsBits.ReadMessageHistory]),
+      members: { fetch: async () => { if (!joined) throw Error('Not a thread member'); return h.actor; } },
+      messages: { fetch: async ({ message }) => {
+        messageReads++;
+        assert.equal(message, messageId);
+        if (sourceText === null) throw Error('Message deleted');
+        return { content: sourceText };
+      } }
+    };
+  };
+  await h.api.handleModerationContextCommand(menuInteraction(h, 'Modlogs'));
+  assert.equal(messageReads, 0);
+  assert(!content(h.responses.at(-1)).includes(sourceText));
+  joined = true;
+  await h.api.handleModerationContextCommand(menuInteraction(h, 'Modlogs'));
+  assert.equal(messageReads, 1);
+  assert(content(h.responses.at(-1)).includes(sourceText));
+  sourceText = null;
+  await h.api.handleModerationContextCommand(menuInteraction(h, 'Modlogs'));
+  assert.match(content(h.responses.at(-1)), /Message unavailable\./);
+  assert(!content(h.responses.at(-1)).includes(url));
+
+  const insert = h.db.prepare('INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at,message_links,message_text) VALUES (?,?,?,?,?,?,?,?)');
+  for (let index = 0; index < 4; index++) {
+    insert.run(h.guild.id, h.user.id, h.actor.id, 'warn', 'Long message', new Date().toISOString(), JSON.stringify([url]), 'Long message text '.repeat(200));
+  }
+  await h.api.handleModerationContextCommand(menuInteraction(h, 'Modlogs'));
+  const longPage = h.responses.at(-1).components[0].toJSON().components.filter(component => component.type === discord.ComponentType.TextDisplay);
+  assert(longPage.reduce((total, component) => total + component.content.length, 0) <= 4000);
+  assert.equal(longPage.filter(component => component.content.includes('...\n```')).length, 4);
   h.db.close();
 });
 

@@ -1,5 +1,5 @@
 import { sendLog } from "./log-webhooks.js";
-import { ApplicationCommandType, ApplicationIntegrationType, AuditLogEvent, ContextMenuCommandBuilder, escapeMarkdown, InteractionContextType, SnowflakeUtil, type GuildAuditLogsEntry } from "discord.js";
+import { ApplicationCommandType, ApplicationIntegrationType, AuditLogEvent, ChannelType, ContextMenuCommandBuilder, escapeMarkdown, InteractionContextType, SnowflakeUtil, type GuildAuditLogsEntry } from "discord.js";
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ButtonInteraction, StringSelectMenuBuilder, StringSelectMenuInteraction, ChatInputCommandInteraction, ModalSubmitInteraction, ModalBuilder, LabelBuilder, UserSelectMenuBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder, ContainerBuilder, SeparatorBuilder, MessageFlags, PermissionFlagsBits as P, SlashCommandBuilder, TextDisplayBuilder } from "discord.js";
 import { db } from "./db.js";
 import type { Guild, GuildMember, GuildTextBasedChannel, MessageContextMenuCommandInteraction, User, UserContextMenuCommandInteraction } from "discord.js";
@@ -9,6 +9,9 @@ CREATE TABLE IF NOT EXISTS moderation_cases (id INTEGER PRIMARY KEY AUTOINCREMEN
 const caseColumns = db.prepare("PRAGMA table_info(moderation_cases)").all() as Array<{ name: string }>;
 if (!caseColumns.some(column => column.name === "message_links")) {
   db.exec("ALTER TABLE moderation_cases ADD COLUMN message_links TEXT NOT NULL DEFAULT '[]'");
+}
+if (!caseColumns.some(column => column.name === "message_text")) {
+  db.exec("ALTER TABLE moderation_cases ADD COLUMN message_text TEXT");
 }
 if (!caseColumns.some(column => column.name === "discord_audit_entry_id")) {
   db.exec("ALTER TABLE moderation_cases ADD COLUMN discord_audit_entry_id TEXT");
@@ -110,12 +113,13 @@ export async function handleHoneypotMessage(message: import("discord.js").Messag
   return true;
 }
 export function moderationCases(guildId: string) {
-  return db.prepare("SELECT * FROM moderation_cases WHERE guild_id=? ORDER BY id DESC LIMIT 50").all(guildId);
+  return db.prepare("SELECT id,guild_id,user_id,moderator_id,action,reason,created_at,cleared,message_links,discord_audit_entry_id FROM moderation_cases WHERE guild_id=? ORDER BY id DESC LIMIT 50").all(guildId);
 }
 const permissions: Record<string, bigint> = { warn: P.ModerateMembers, warnings: P.ModerateMembers, clearwarnings: P.ModerateMembers, timeout: P.ModerateMembers, untimeout: P.ModerateMembers, kick: P.KickMembers, softban: P.BanMembers, ban: P.BanMembers, unban: P.BanMembers, purge: P.ManageMessages };
 async function escalateWarning(
   guild: Guild, actor: GuildMember, userId: string, count: number, rule: WarningRule,
-  caseId: string, auditReason: string, recordedReason: string, messageLinks: string[], automatic = false
+  caseId: string, auditReason: string, recordedReason: string, messageLinks: string[],
+  { automatic = false, messageText = null }: { automatic?: boolean; messageText?: string | null } = {}
 ) {
   const target = await guild.members.fetch(userId).catch(() => null);
   const currentActor = await guild.members.fetch(automatic ? { user: actor.id, force: true } : actor.id);
@@ -142,8 +146,8 @@ async function escalateWarning(
     if (!target?.moderatable) throw new Error("Member is absent or cannot be timed out");
     await target.timeout(rule.minutes! * 60000, escalationReason);
   }
-  return db.prepare("INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at,message_links) VALUES (?,?,?,?,?,?,?)")
-    .run(guild.id, userId, automatic ? guild.client.user.id : actor.id, rule.action, `Automatic at warning ${count} (warning case #${caseId}): ${recordedReason}${rule.action === "timeout" ? ` - ${rule.minutes} minutes` : ""}`, new Date().toISOString(), JSON.stringify(messageLinks));
+  return db.prepare("INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at,message_links,message_text) VALUES (?,?,?,?,?,?,?,?)")
+    .run(guild.id, userId, automatic ? guild.client.user.id : actor.id, rule.action, `Automatic at warning ${count} (warning case #${caseId}): ${recordedReason}${rule.action === "timeout" ? ` - ${rule.minutes} minutes` : ""}`, new Date().toISOString(), JSON.stringify(messageLinks), messageText);
 }
 
 export async function recordAutoModCase(
@@ -158,7 +162,7 @@ export async function recordAutoModCase(
   const details: string[] = [];
   if (rule) {
     try {
-      const punishment = await escalateWarning(guild, actor, userId, count, rule, caseId, reason, reason, [], true);
+      const punishment = await escalateWarning(guild, actor, userId, count, rule, caseId, reason, reason, [], { automatic: true });
       const duration = rule.action === "timeout" ? ` for ${rule.minutes} minutes` : "";
       details.push(`Automatic ${rule.action}${duration} (case #${punishment.lastInsertRowid})`);
     } catch (error) {
@@ -297,14 +301,43 @@ function discordMessageLinkParts(link: string) {
   } catch { return null; }
 }
 
-function modlogMessageLinks(storedLinks: string, guildId: string) {
+function modlogMessageSources(storedLinks: string, guildId: string) {
   let links: unknown;
   try { links = JSON.parse(storedLinks); } catch { return []; }
   if (!Array.isArray(links)) return [];
   return links.flatMap(link => {
     const path = typeof link === "string" ? discordMessageLinkParts(link) : null;
-    return path?.[1] === guildId ? [`[View message](https://discord.com/channels/${path[1]}/${path[2]}/${path[3]})`] : [];
+    return path?.[1] === guildId ? [{ channelId: path[2], messageId: path[3] }] : [];
   });
+}
+
+async function readableMessageText(viewer: GuildMember | null, channelId: string, messageId: string, savedText: string | null = null) {
+  if (!viewer) return null;
+  const channel = await viewer.guild.channels.fetch(channelId).catch(() => null);
+  if (!channel?.isTextBased()) return null;
+  const permissions = channel.permissionsFor(viewer);
+  if (!permissions?.has([P.ViewChannel, P.ReadMessageHistory])) return null;
+  if (channel.type === ChannelType.PrivateThread && !permissions.has(P.ManageThreads)) {
+    const membership = await channel.members.fetch({ member: viewer.id, force: true, cache: false }).catch(() => null);
+    if (!membership) return null;
+  }
+  if (savedText !== null) return savedText;
+  const message = await channel.messages.fetch({ message: messageId, force: true, cache: false }).catch(() => null);
+  return message?.content ?? null;
+}
+
+function modlogMessageText(text: string | null, maxLength: number) {
+  if (!text?.trim()) {
+    const label = text === null ? "Message unavailable." : "Message has no text.";
+    return label.length <= maxLength ? label : "";
+  }
+  const header = "**Message**\n```\n";
+  const footer = "\n```";
+  const textLimit = maxLength - header.length - footer.length;
+  if (textLimit < 4) return "";
+  const safeText = text.replace(/``/g, "`\u200b`");
+  const excerpt = safeText.length <= textLimit ? safeText : `${safeText.slice(0, textLimit - 3).replace(/[\uD800-\uDBFF]$/, "")}...`;
+  return `${header}${excerpt}${footer}`;
 }
 
 async function memberModlogs(interaction: ButtonInteraction | ModalSubmitInteraction | UserContextMenuCommandInteraction, targetId: string, ownerId: string, requestedPage = 0, warningsOnly = false, clearedOnly = false) {
@@ -315,25 +348,44 @@ async function memberModlogs(interaction: ButtonInteraction | ModalSubmitInterac
   const total = (db.prepare(`SELECT COUNT(*) AS count FROM moderation_cases WHERE guild_id=? AND user_id=?${filter}`).get(guildId, targetId) as { count: number }).count;
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.max(0, Math.min(pages - 1, Number.isSafeInteger(requestedPage) ? requestedPage : 0));
-  const rows = db.prepare(`SELECT id,action,moderator_id,reason,created_at,cleared,message_links FROM moderation_cases WHERE guild_id=? AND user_id=?${filter} ORDER BY id DESC LIMIT ? OFFSET ?`).all(guildId, targetId, pageSize, page * pageSize) as Array<{ id: number; action: string; moderator_id: string; reason: string; created_at: string; cleared: number; message_links: string }>;
+  const rows = db.prepare(`SELECT id,action,moderator_id,reason,created_at,cleared,message_links,message_text FROM moderation_cases WHERE guild_id=? AND user_id=?${filter} ORDER BY id DESC LIMIT ? OFFSET ?`).all(guildId, targetId, pageSize, page * pageSize) as Array<{ id: number; action: string; moderator_id: string; reason: string; created_at: string; cleared: number; message_links: string; message_text: string | null }>;
+  const sources = rows.map(row => modlogMessageSources(row.message_links, guildId));
+  const viewer = sources.some(links => links.length) && interaction.guild
+    ? await interaction.guild.members.fetch(interaction.user.id).catch(() => null) : null;
   const ids = [...new Set([targetId, ...rows.map(row => row.moderator_id)])];
-  const users = new Map(await Promise.all(ids.map(async id => [id, await interaction.client.users.fetch(id).catch(() => null)] as const)));
+  const messages = sources.map((links, rowIndex) => Promise.all(links.map(({ channelId, messageId }, linkIndex) => {
+    const savedText = linkIndex === 0 ? rows[rowIndex].message_text : null;
+    return readableMessageText(viewer, channelId, messageId, savedText);
+  })));
+  const [userEntries, messageTexts] = await Promise.all([
+    Promise.all(ids.map(async id => [id, await interaction.client.users.fetch(id).catch(() => null)] as const)),
+    Promise.all(messages)
+  ]);
+  const users = new Map(userEntries);
+  const historyType = clearedOnly ? "Cleared warnings" : warningsOnly ? "Warnings" : "Modlogs";
+  const title = `**${historyType} for ${users.get(targetId)?.username || targetId}**`;
+  const pageLabel = `Page ${page + 1}/${pages} (${total} ${clearedOnly ? "cleared warnings" : warningsOnly ? "active warnings" : "logs"})`;
   const container = new ContainerBuilder().setAccentColor(0xf45f77)
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${clearedOnly ? "Cleared warnings" : warningsOnly ? "Warnings" : "Modlogs"} for ${users.get(targetId)?.username || targetId}**`))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(title))
     .addSeparatorComponents(new SeparatorBuilder().setDivider(true));
   const labels: Record<string, string> = { warn: "Warn", kick: "Kick", softban: "Softban", ban: "Ban", unban: "Unban", timeout: "Timeout", untimeout: "Timeout removed", clearwarnings: "Warnings cleared", purge: "Purge" };
-  for (const row of rows) {
+  const entries = rows.map(row => {
     const duration = row.action === "timeout" ? row.reason.match(/\s*[\u00b7?-]\s*(\d+) minutes$/) : null;
     const reason = duration ? row.reason.slice(0, duration.index) : row.reason;
     const seconds = Math.floor(new Date(row.created_at).getTime() / 1000);
-    if (row !== rows[0]) container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-    const entry = `**Case ${row.id} - ${labels[row.action] || row.action}${row.cleared ? " (cleared)" : ""}**\n**Mod:** ${users.get(row.moderator_id)?.username || row.moderator_id}${duration ? `\n**Length:** ${duration[1]} minutes` : ""}\n**Reason:** ${reason}\n<t:${seconds}:F>`;
-    container.addTextDisplayComponents(new TextDisplayBuilder().setContent([entry, ...modlogMessageLinks(row.message_links, guildId)].join("\n")));
+    return `**Case ${row.id} - ${labels[row.action] || row.action}${row.cleared ? " (cleared)" : ""}**\n**Mod:** ${users.get(row.moderator_id)?.username || row.moderator_id}${duration ? `\n**Length:** ${duration[1]} minutes` : ""}\n**Reason:** ${reason}\n<t:${seconds}:F>`;
+  });
+  const sourceCount = messageTexts.flat().length;
+  const messageTextLimit = Math.floor((4000 - title.length - pageLabel.length - entries.join("").length) / (sourceCount || 1)) - 1;
+  for (const [index, entry] of entries.entries()) {
+    if (index > 0) container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+    const previews = messageTexts[index].map(text => modlogMessageText(text, messageTextLimit)).filter(Boolean);
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent([entry, ...previews].join("\n")));
   }
   if (!rows.length) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(clearedOnly ? "This member has no cleared warnings." : warningsOnly ? "This member has no active warnings." : "No moderation history for this member."));
   if (total > 0) {
-  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true))
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`Page ${page + 1}/${pages} (${total} ${clearedOnly ? "cleared warnings" : warningsOnly ? "active warnings" : "logs"})`));
+    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(pageLabel));
   }
   const navigation = new ActionRowBuilder<ButtonBuilder>();
   if (pages > 1) navigation.addComponents(
@@ -351,6 +403,16 @@ async function fetchModerationTarget(interaction: ModalSubmitInteraction, userId
     if (typeof error === "object" && error !== null && "code" in error && error.code === 10007) return null;
     throw error;
   }
+}
+
+const pendingMessageText = new Map<string, { text: string; expiry: ReturnType<typeof setTimeout> }>();
+
+function takePendingMessageText(customId: string) {
+  const pending = pendingMessageText.get(customId);
+  if (!pending) return undefined;
+  clearTimeout(pending.expiry);
+  pendingMessageText.delete(customId);
+  return pending.text;
 }
 
 export async function handleModerationContextCommand(interaction: ModerationContextInteraction) {
@@ -375,7 +437,12 @@ export async function handleModerationContextCommand(interaction: ModerationCont
         .addLabelComponents(shortInput("reason", "Reason", false)));
       return true;
     }
-    await interaction.showModal(moderationModal(action, ownerId, message.author, message.id));
+    const modal = moderationModal(action, ownerId, message.author, message.id);
+    const customId = `${modal.data.custom_id}:${BigInt(interaction.id).toString(36)}`;
+    const expiry = setTimeout(() => pendingMessageText.delete(customId), 15 * 60 * 1000).unref();
+    pendingMessageText.set(customId, { text: message.content, expiry });
+    try { await interaction.showModal(modal.setCustomId(customId)); }
+    catch (error) { takePendingMessageText(customId); throw error; }
     return true;
   }
   if (action === "warnings") {
@@ -495,11 +562,9 @@ export async function handleModerationCommand(interaction: ChatInputCommandInter
   const rawLink = sourceMessageId ? `https://discord.com/channels/${guild.id}/${interaction.channelId}/${sourceMessageId}`
     : memberPunishments.some(({ value }) => value === action) ? field("message-links") : "";
   const messageLinks = rawLink ? [rawLink.replace(/^<(.+)>$/, "$1")] : [];
-  if (messageLinks.length) {
-    const path = discordMessageLinkParts(messageLinks[0]);
-    if (!path) return respond("Paste one Discord message link using Copy Message Link, or leave the field empty.");
-    if (path[1] !== guild.id) return respond("That message link belongs to a different server. Copy a message link from this server, or leave the field empty.");
-  }
+  const messagePath = messageLinks.length ? discordMessageLinkParts(messageLinks[0]) : null;
+  if (messageLinks.length && !messagePath) return respond("Paste one Discord message link using Copy Message Link, or leave the field empty.");
+  if (messagePath && messagePath[1] !== guild.id) return respond("That message link belongs to a different server. Copy a message link from this server, or leave the field empty.");
   const auditReason = `${interaction.user.tag}: ${reason}`.slice(0, 512);
   let endBanChange: (() => void) | undefined;
   try {
@@ -508,6 +573,8 @@ export async function handleModerationCommand(interaction: ChatInputCommandInter
       await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
       return true;
     }
+    const messageText = !purgeFrom && messagePath
+      ? takePendingMessageText(interaction.customId) ?? await readableMessageText(actor, messagePath[2], messagePath[3]) : null;
     let recordedAction = action;
     let actionFailure = "";
     let memberName = user?.username || userId;
@@ -577,7 +644,7 @@ export async function handleModerationCommand(interaction: ChatInputCommandInter
     }
     if (action === "clearwarnings") result = `Warning case #${warningCaseId} cleared for ${memberName}.`;
     const recordedReason = action === "clearwarnings" ? `Cleared warning case #${warningCaseId}: ${clearedWarningReason}. Clearing reason: ${reason}` : action === "timeout" ? `${reason} · ${minutes} minutes` : action === "purge" ? `${reason} · ${result} · channel ${interaction.channelId}` : actionFailure ? `${reason} - ${actionFailure}` : reason;
-    const record = db.prepare("INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at,message_links) VALUES (?,?,?,?,?,?,?)").run(guild.id, userId, actor.id, recordedAction, recordedReason, new Date().toISOString(), JSON.stringify(messageLinks));
+    const record = db.prepare("INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at,message_links,message_text) VALUES (?,?,?,?,?,?,?,?)").run(guild.id, userId, actor.id, recordedAction, recordedReason, new Date().toISOString(), JSON.stringify(messageLinks), messageText);
     const caseId = String(record.lastInsertRowid);
     let escalationStatus = "";
     if (action === "warn" && userId) {
@@ -586,7 +653,7 @@ export async function handleModerationCommand(interaction: ChatInputCommandInter
       escalationStatus = `Active warnings: ${count}.`;
       if (rule) {
         try {
-          const punishment = await escalateWarning(guild, actor, userId, count, rule, caseId, auditReason, recordedReason, messageLinks);
+          const punishment = await escalateWarning(guild, actor, userId, count, rule, caseId, auditReason, recordedReason, messageLinks, { messageText });
           escalationStatus += ` Automatic punishment: ${rule.action}${rule.action === "timeout" ? ` for ${rule.minutes} minutes` : ""} completed (case #${punishment.lastInsertRowid}).`;
         } catch (error) {
           escalationStatus += ` Automatic ${rule.action} failed: ${error instanceof Error ? error.message : "Discord rejected the action"}. The warning is still recorded.`;
