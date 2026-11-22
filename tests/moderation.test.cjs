@@ -279,6 +279,74 @@ test('softban removes 24 hours of messages and records a ban if the unban fails'
   h.db.close();
 });
 
+test('moderation results offer follow-up actions for the target’s current status', async () => {
+  const h = setup();
+  const { UnknownMember, UnknownBan } = discord.RESTJSONErrorCodes;
+  const { BanMembers, KickMembers, ModerateMembers } = discord.PermissionFlagsBits;
+  const target = await h.guild.members.fetch(h.user.id);
+  let timedOut = false;
+  let banned = false;
+  target.isCommunicationDisabled = () => timedOut;
+  h.guild.bans.fetch = async options => {
+    assert.deepEqual({ ...options }, { user: h.user.id, force: true });
+    if (banned) return { user: h.user };
+    throw Object.assign(Error('Unknown Ban'), { code: UnknownBan });
+  };
+  const actionRow = () => h.responses.at(-1).components[0].toJSON().components.find(c => c.type === discord.ComponentType.ActionRow);
+  await h.api.handleModerationCommand(h.interaction('warn'));
+  const buttons = actionRow().components;
+  assert.deepEqual(buttons.map(button => button.label), ['View modlogs', 'Take more action']);
+  assert(buttons.every(button => button.style === discord.ButtonStyle.Secondary));
+
+  const openActions = async (permissions = [BanMembers, KickMembers, ModerateMembers]) => {
+    const click = h.interaction('', {}, 'button');
+    click.customId = buttons[1].custom_id;
+    click.memberPermissions = new discord.PermissionsBitField(permissions);
+    await h.api.handleModerationCommand(click);
+    assert.equal(click.replyFlags, discord.MessageFlags.Ephemeral);
+    return actionRow()?.components[0];
+  };
+  const submitAction = async (menu, action, cached) => {
+    const select = h.interaction('', {}, 'select');
+    select.customId = menu.custom_id;
+    select.values = [action];
+    select.client.users.cache = cached ? new Map([[h.user.id, h.user]]) : new Map();
+    await h.api.handleModerationCommand(select);
+    const modal = h.events.at(-1)[1];
+    assert.equal(modal.custom_id, `moderation:${action}:${h.actor.id}:${h.user.id}`);
+    assert.deepEqual(modal.components.filter(c => c.type === discord.ComponentType.Label).map(c => c.component.custom_id), ['reason']);
+    const submit = h.interaction('');
+    submit.customId = modal.custom_id;
+    await h.api.handleModerationCommand(submit);
+  };
+
+  let menu = await openActions();
+  assert.deepEqual(menu.options.map(option => option.value), ['ban', 'kick', 'timeout']);
+  timedOut = true;
+  menu = await openActions();
+  assert.deepEqual(menu.options.map(option => option.value), ['ban', 'kick', 'untimeout']);
+  assert.equal(menu.options[2].label, 'Untimeout');
+  assert.deepEqual((await openActions([ModerateMembers])).options.map(option => option.value), ['untimeout']);
+  await submitAction(menu, 'untimeout', true);
+  assert(h.events.some(([type, duration]) => type === 'timeout' && duration === null));
+  assert.equal(h.db.prepare("SELECT user_id FROM moderation_cases WHERE action='untimeout'").get().user_id, h.user.id);
+
+  h.targetError(Object.assign(Error('Unknown Member'), { code: UnknownMember }));
+  assert.deepEqual((await openActions()).options.map(option => option.value), ['ban']);
+  banned = true;
+  menu = await openActions();
+  assert.deepEqual(menu.options.map(option => option.value), ['unban']);
+  assert.equal(await openActions([ModerateMembers]), undefined);
+  await submitAction(menu, 'unban', false);
+  assert(h.events.some(([type]) => type === 'unban'));
+  assert.equal(h.db.prepare("SELECT user_id FROM moderation_cases WHERE action='unban'").get().user_id, h.user.id);
+
+  h.guild.bans.fetch = async () => { throw Error('Lookup unavailable'); };
+  assert.equal(await openActions(), undefined);
+  assert.match(content(h.responses.at(-1)), /Could not check this user's moderation status/);
+  h.db.close();
+});
+
 test('Purge from here confirms and deletes only the bounded range in the channel', async () => {
   const h = setup();
   const now = Date.now();

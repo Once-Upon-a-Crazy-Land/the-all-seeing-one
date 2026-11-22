@@ -1,5 +1,5 @@
 import { sendLog } from "./log-webhooks.js";
-import { ApplicationCommandType, ApplicationIntegrationType, AuditLogEvent, ChannelType, ContextMenuCommandBuilder, escapeMarkdown, InteractionContextType, SnowflakeUtil, type GuildAuditLogsEntry } from "discord.js";
+import { ApplicationCommandType, ApplicationIntegrationType, AuditLogEvent, ChannelType, ContextMenuCommandBuilder, escapeMarkdown, InteractionContextType, RESTJSONErrorCodes, SnowflakeUtil, type GuildAuditLogsEntry } from "discord.js";
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ButtonInteraction, StringSelectMenuBuilder, StringSelectMenuInteraction, ChatInputCommandInteraction, ModalSubmitInteraction, ModalBuilder, LabelBuilder, UserSelectMenuBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder, ContainerBuilder, SeparatorBuilder, MessageFlags, PermissionFlagsBits as P, SlashCommandBuilder, TextDisplayBuilder } from "discord.js";
 import { db } from "./db.js";
 import type { Guild, GuildMember, GuildTextBasedChannel, MessageContextMenuCommandInteraction, User, UserContextMenuCommandInteraction } from "discord.js";
@@ -227,6 +227,7 @@ export async function handleDiscordTimeout(entry: GuildAuditLogsEntry, guild: Gu
 }
 const slashActionNames = { warn: "Warn member", warnings: "Modlogs", clearwarnings: "Clear case", timeout: "Timeout member", untimeout: "Remove timeout", kick: "Kick member", ban: "Ban member", unban: "Unban user", purge: "Purge messages" };
 const actionNames: Record<string, string> = { ...slashActionNames, softban: "Softban member" };
+const followUpActions = ["ban", "unban", "kick", "timeout", "untimeout"];
 const memberPunishments = [
   { label: "Warn", value: "warn" },
   { label: "Timeout", value: "timeout" },
@@ -265,16 +266,16 @@ function shortInput(id: string, label: string, required = true, maxLength = 400)
 }
 
 export function moderationModal(action: string, ownerId: string, target?: string | User, sourceMessageId?: string) {
-  const fixedTarget = typeof target === "object" ? target : undefined;
-  const customId = ["moderation", action, ownerId, fixedTarget?.id, sourceMessageId].filter(Boolean).join(":");
+  const targetId = typeof target === "string" ? target : target?.id;
+  const customId = ["moderation", action, ownerId, targetId, sourceMessageId].filter(Boolean).join(":");
   const modal = new ModalBuilder().setCustomId(customId)
-    .setTitle(fixedTarget && action === "clearwarnings" ? "Clear Warning" : actionNames[action]);
+    .setTitle(targetId && action === "clearwarnings" ? "Clear Warning" : actionNames[action]);
   if (action === "purge") modal.addLabelComponents(shortInput("amount", "Number of recent messages (1-100)", true, 3));
+  else if (typeof target === "string") modal.addTextDisplayComponents(new TextDisplayBuilder().setContent(`User ID: ${target}`));
+  else if (target) modal.addTextDisplayComponents(new TextDisplayBuilder().setContent(`Member: ${escapeMarkdown(target.username)}`));
   else if (action === "unban") modal.addLabelComponents(shortInput("user-id", "Discord ID of the banned user", true, 20));
-  else if (fixedTarget) modal.addTextDisplayComponents(new TextDisplayBuilder().setContent(`Member: ${escapeMarkdown(fixedTarget.username)}`));
   else {
     const memberSelect = new UserSelectMenuBuilder().setCustomId("member").setMinValues(1).setMaxValues(1);
-    if (typeof target === "string") memberSelect.setDefaultUsers(target);
     modal.addLabelComponents(new LabelBuilder().setLabel("Member").setUserSelectMenuComponent(memberSelect));
   }
   if (action === "clearwarnings") modal.addLabelComponents(shortInput("case-number", "Warning case number to clear", true, 16));
@@ -397,10 +398,10 @@ async function memberModlogs(interaction: ButtonInteraction | ModalSubmitInterac
   return container;
 }
 
-async function fetchModerationTarget(interaction: ModalSubmitInteraction, userId: string, force = false) {
-  try { return await interaction.guild!.members.fetch(force ? { user: userId, force } : userId); }
+async function fetchModerationTarget(guild: Guild, userId: string, force = false) {
+  try { return await guild.members.fetch(force ? { user: userId, force } : userId); }
   catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === 10007) return null;
+    if (typeof error === "object" && error !== null && "code" in error && error.code === RESTJSONErrorCodes.UnknownMember) return null;
     throw error;
   }
 }
@@ -495,9 +496,9 @@ export async function handleModerationCommand(interaction: ChatInputCommandInter
     if (!moderationSettings(interaction.guild.id).enabled) return deny("Moderation is disabled for this server.");
     if (interaction.isStringSelectMenu()) {
       const selected = interaction.values[0];
-      if (tool !== "choose" || !["ban", "kick", "timeout"].includes(selected)) return false;
+      if (tool !== "choose" || !followUpActions.includes(selected)) return false;
       if (!canModerate(interaction, selected)) return deny("You do not have permission for this action.");
-      await interaction.showModal(moderationModal(selected, ownerId, targetId));
+      await interaction.showModal(moderationModal(selected, ownerId, interaction.client.users.cache.get(targetId) ?? targetId));
       return true;
     }
     if (tool === "logs" || tool === "logs-page" || tool === "warnings-page" || tool === "cleared" || tool === "cleared-page") {
@@ -508,10 +509,29 @@ export async function handleModerationCommand(interaction: ChatInputCommandInter
       return true;
     }
     if (tool === "action") {
-      const choices = ["ban", "kick", "timeout"].filter(action => canModerate(interaction, action));
-      if (!choices.length) return deny("You do not have permission to ban, kick, or timeout members.");
-      const menu = new StringSelectMenuBuilder().setCustomId(`mod-tools:choose:${ownerId}:${targetId}`).setPlaceholder("Choose an action").addOptions(choices.map(value => ({ label: actionNames[value], value })));
-      const container = moderationReply("Take action", "Choose a punishment, then provide its details.").addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu));
+      const allowed = followUpActions.filter(action => canModerate(interaction, action));
+      if (!allowed.length) return deny("You do not have permission to take more action.");
+      let choices: string[] = [];
+      try {
+        const target = await fetchModerationTarget(interaction.guild, targetId, true);
+        if (target) {
+          choices = ["ban", "kick", target.isCommunicationDisabled() ? "untimeout" : "timeout"];
+        } else if (allowed.includes("ban")) {
+          const ban = await interaction.guild.bans.fetch({ user: targetId, force: true }).catch(error => {
+            if (error?.code === RESTJSONErrorCodes.UnknownBan) return null;
+            throw error;
+          });
+          choices = [ban ? "unban" : "ban"];
+        }
+      } catch (error) {
+        console.error("Moderation status lookup failed", error);
+        return deny("Could not check this user's moderation status. Try again.");
+      }
+      const options = choices.filter(value => allowed.includes(value))
+        .map(value => ({ label: value === "untimeout" ? "Untimeout" : actionNames[value], value }));
+      if (!options.length) return deny("You have no available actions for this user.");
+      const menu = new StringSelectMenuBuilder().setCustomId(`mod-tools:choose:${ownerId}:${targetId}`).setPlaceholder("Choose an action").addOptions(options);
+      const container = moderationReply("Take more action", "Choose an action, then provide its details.").addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu));
       await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
       return true;
     }
@@ -585,7 +605,7 @@ export async function handleModerationCommand(interaction: ChatInputCommandInter
         endBanChange = startBanChange(`${guild.id}:${userId}`);
         if (!endBanChange) return respond("A ban action is already in progress for this member.");
       }
-      const target = await fetchModerationTarget(interaction, userId, action === "softban");
+      const target = await fetchModerationTarget(guild, userId, action === "softban");
       memberName = target?.user?.username || memberName;
       if (target && actor.id !== guild.ownerId && actor.roles.highest.comparePositionTo(target.roles.highest) <= 0) return respond("Your highest role must be above the member's highest role.");
       if (["warn", "timeout", "untimeout", "kick", "softban", "ban"].includes(action) && target && me.roles.highest.comparePositionTo(target.roles.highest) <= 0) return respond("The bot's highest role must be above the member's highest role.");
@@ -718,8 +738,7 @@ export async function handleModerationCommand(interaction: ChatInputCommandInter
       const container = moderationReply(actionNames[recordedAction], `Case #${caseId}: ${summaryLabels[recordedAction]} ${memberName}.${duration}${action === "warn" ? `\nTotal warnings: ${total}` : ""}`)
         .addActionRowComponents(new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder().setCustomId(`mod-tools:logs:${actor.id}:${userId}`).setLabel("View modlogs").setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`mod-tools:action:${actor.id}:${userId}`).setLabel("Take action").setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`mod-tools:cleared:${actor.id}:${userId}`).setLabel("Cleared warnings").setStyle(ButtonStyle.Secondary)
+          new ButtonBuilder().setCustomId(`mod-tools:action:${actor.id}:${userId}`).setLabel("Take more action").setStyle(ButtonStyle.Secondary)
         ));
       const adminDetails = [actionFailure, escalationStatus.includes("Automatic") ? escalationStatus : "", dmStatus, logStatus].filter(Boolean).join("\n");
       if (adminDetails) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(adminDetails));
