@@ -99,7 +99,9 @@ function authorizeDiscord(req: Request, res: Response, install: boolean) {
     const permissions = PermissionFlagsBits.ManageRoles | PermissionFlagsBits.ViewChannel |
       PermissionFlagsBits.SendMessages | PermissionFlagsBits.EmbedLinks | PermissionFlagsBits.ReadMessageHistory |
       PermissionFlagsBits.ManageGuild | PermissionFlagsBits.ModerateMembers |
-      PermissionFlagsBits.ViewAuditLog | PermissionFlagsBits.ChangeNickname | PermissionFlagsBits.ManageWebhooks;
+      PermissionFlagsBits.ViewAuditLog | PermissionFlagsBits.ChangeNickname | PermissionFlagsBits.ManageWebhooks |
+      PermissionFlagsBits.BanMembers | PermissionFlagsBits.KickMembers | PermissionFlagsBits.ManageMessages |
+      PermissionFlagsBits.AttachFiles;
     query.set("permissions", permissions.toString());
     query.set("integration_type", "0");
   }
