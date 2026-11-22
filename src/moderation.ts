@@ -78,13 +78,7 @@ export async function handleHoneypotMessage(message: import("discord.js").Messag
     endBanChange = startBanChange(key);
     if (!endBanChange) throw new Error("A ban action is already in progress for this member.");
     try {
-      await message.author.send({
-        components: [new ContainerBuilder().setAccentColor(0xf45f77).addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(`You were banned from ${guild.name} for posting in a honeypot channel.`)
-        )],
-        flags: MessageFlags.IsComponentsV2,
-        allowedMentions: { parse: [] }
-      });
+      await message.author.send(moderationDm(`You were banned from ${guild.name} for posting in a honeypot channel.`, message.content));
     } catch { failure = "Could not DM member."; }
     await guild.members.ban(message.author.id, { deleteMessageSeconds: softbanDeleteSeconds, reason: "Honeypot channel message" });
     outcome = "Ban";
@@ -92,8 +86,8 @@ export async function handleHoneypotMessage(message: import("discord.js").Messag
       await guild.bans.remove(message.author.id, "Honeypot softban: allow rejoining");
       outcome = "Softban";
     } catch { failure = [failure, "Unban failed; member remains banned. Unban them manually."].filter(Boolean).join("\n"); }
-    db.prepare("INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at,message_links) VALUES (?,?,?,?,?,?,?)")
-      .run(guild.id, message.author.id, me.id, outcome.toLowerCase(), "Honeypot channel message", new Date().toISOString(), JSON.stringify([message.url]));
+    db.prepare("INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at,message_links,message_text) VALUES (?,?,?,?,?,?,?,?)")
+      .run(guild.id, message.author.id, me.id, outcome.toLowerCase(), "Honeypot channel message", new Date().toISOString(), JSON.stringify([message.url]), message.content ?? null);
   } catch (error) {
     failure = [failure, error instanceof Error ? error.message : "Could not softban member."].filter(Boolean).join("\n");
   } finally {
@@ -105,7 +99,7 @@ export async function handleHoneypotMessage(message: import("discord.js").Messag
     try {
       const channel = await guild.channels.fetch(settings.log_channel_id);
       if (!channel?.isSendable()) throw new Error("Moderation log channel unavailable");
-      await sendLog(guild, channel, "moderation", { embeds: [new EmbedBuilder().setColor(0x77f45f).setDescription(
+      await sendLog(guild, channel, "moderation", { embeds: [new EmbedBuilder().setColor(0xf45f77).setDescription(
         `${outcome}: ${message.author.username}\nMod: ${message.client.user?.username || "Bot"}\nReason: Honeypot channel message\n${message.url}${failure ? `\n${failure}` : ""}`
       )], allowedMentions: { parse: [] } });
     } catch (error) { console.error("Honeypot log failed", error); }
@@ -151,7 +145,7 @@ async function escalateWarning(
 }
 
 export async function recordAutoModCase(
-  guild: Guild, userId: string, reason: string, settings: ReturnType<typeof moderationSettings>, actor: GuildMember | null
+  guild: Guild, userId: string, reason: string, settings: ReturnType<typeof moderationSettings>, actor: GuildMember | null, messageText?: string
 ) {
   const record = db.prepare("INSERT INTO moderation_cases (guild_id,user_id,moderator_id,action,reason,created_at) VALUES (?,?,?,?,?,?)")
     .run(guild.id, userId, guild.client.user.id, actor ? "warn" : "automod", reason, new Date().toISOString());
@@ -172,8 +166,7 @@ export async function recordAutoModCase(
   }
   try {
     const recipient = await guild.client.users.fetch(userId);
-    const embed = new EmbedBuilder().setColor(0xf45f77).setDescription(`You were warned in ${guild.name} for ${reason}`);
-    await recipient.send({ embeds: [embed], allowedMentions: { parse: [] } });
+    await recipient.send(moderationDm(`You were warned in ${guild.name} for ${reason}`, messageText));
   } catch (error) {
     console.error("AutoMod warning DM failed", error);
     details.push("Warning DM could not be delivered.");
@@ -312,7 +305,9 @@ function modlogMessageSources(storedLinks: string, guildId: string) {
   });
 }
 
-async function readableMessageText(viewer: GuildMember | null, channelId: string, messageId: string, savedText: string | null = null) {
+async function readableMessageSource(
+  viewer: GuildMember | null, channelId: string, messageId: string, savedText: string | null = null
+): Promise<{ text: string; authorId?: string } | null> {
   if (!viewer) return null;
   const channel = await viewer.guild.channels.fetch(channelId).catch(() => null);
   if (!channel?.isTextBased()) return null;
@@ -322,23 +317,35 @@ async function readableMessageText(viewer: GuildMember | null, channelId: string
     const membership = await channel.members.fetch({ member: viewer.id, force: true, cache: false }).catch(() => null);
     if (!membership) return null;
   }
-  if (savedText !== null) return savedText;
+  if (savedText !== null) return { text: savedText };
   const message = await channel.messages.fetch({ message: messageId, force: true, cache: false }).catch(() => null);
-  return message?.content ?? null;
+  return message && { text: message.content, authorId: message.author.id };
+}
+
+function quotedMessageText(text: string | null | undefined, maxLength: number) {
+  if (!text?.trim() || maxLength < 6) return "";
+  const safeText = escapeMarkdown(text, { heading: true, bulletedList: true, numberedList: true, maskedLink: true })
+    .replace(/(^|\n)([ \t]*)>/g, "$1$2\\>");
+  const textLimit = maxLength - 2;
+  if (safeText.length <= textLimit) return `"${safeText}"`;
+  const excerpt = safeText.slice(0, textLimit - 3).replace(/[\uD800-\uDBFF\\]+$/, "");
+  return `"${excerpt}..."`;
+}
+
+function moderationDm(description: string, messageText?: string | null) {
+  const quote = quotedMessageText(messageText, 4096 - description.length - 2);
+  const embed = new EmbedBuilder().setColor(0xf45f77).setDescription(quote ? `${description}\n\n${quote}` : description);
+  return { embeds: [embed], allowedMentions: { parse: [] } };
 }
 
 function modlogMessageText(text: string | null, maxLength: number) {
-  if (!text?.trim()) {
-    const label = text === null ? "Message unavailable." : "Message has no text.";
-    return label.length <= maxLength ? label : "";
+  if (text?.trim()) {
+    const label = "**Message**\n";
+    const quote = quotedMessageText(text, maxLength - label.length);
+    return quote ? `${label}${quote}` : "";
   }
-  const header = "**Message**\n```\n";
-  const footer = "\n```";
-  const textLimit = maxLength - header.length - footer.length;
-  if (textLimit < 4) return "";
-  const safeText = text.replace(/``/g, "`\u200b`");
-  const excerpt = safeText.length <= textLimit ? safeText : `${safeText.slice(0, textLimit - 3).replace(/[\uD800-\uDBFF]$/, "")}...`;
-  return `${header}${excerpt}${footer}`;
+  const label = text === null ? "Message unavailable." : "Message has no text.";
+  return label.length <= maxLength ? label : "";
 }
 
 async function memberModlogs(interaction: ButtonInteraction | ModalSubmitInteraction | UserContextMenuCommandInteraction, targetId: string, ownerId: string, requestedPage = 0, warningsOnly = false, clearedOnly = false) {
@@ -354,9 +361,9 @@ async function memberModlogs(interaction: ButtonInteraction | ModalSubmitInterac
   const viewer = sources.some(links => links.length) && interaction.guild
     ? await interaction.guild.members.fetch(interaction.user.id).catch(() => null) : null;
   const ids = [...new Set([targetId, ...rows.map(row => row.moderator_id)])];
-  const messages = sources.map((links, rowIndex) => Promise.all(links.map(({ channelId, messageId }, linkIndex) => {
+  const messages = sources.map((links, rowIndex) => Promise.all(links.map(async ({ channelId, messageId }, linkIndex) => {
     const savedText = linkIndex === 0 ? rows[rowIndex].message_text : null;
-    return readableMessageText(viewer, channelId, messageId, savedText);
+    return (await readableMessageSource(viewer, channelId, messageId, savedText))?.text ?? null;
   })));
   const [userEntries, messageTexts] = await Promise.all([
     Promise.all(ids.map(async id => [id, await interaction.client.users.fetch(id).catch(() => null)] as const)),
@@ -593,8 +600,11 @@ export async function handleModerationCommand(interaction: ChatInputCommandInter
       await interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } });
       return true;
     }
-    const messageText = !purgeFrom && messagePath
-      ? takePendingMessageText(interaction.customId) ?? await readableMessageText(actor, messagePath[2], messagePath[3]) : null;
+    const selectedText = !purgeFrom && messageId ? takePendingMessageText(interaction.customId) : undefined;
+    const linkedMessage = selectedText === undefined && !purgeFrom && messagePath
+      ? await readableMessageSource(actor, messagePath[2], messagePath[3]) : null;
+    const messageText = selectedText ?? linkedMessage?.text ?? null;
+    const dmMessageText = selectedText !== undefined || linkedMessage?.authorId === userId ? messageText : null;
     let recordedAction = action;
     let actionFailure = "";
     let memberName = user?.username || userId;
@@ -687,16 +697,12 @@ export async function handleModerationCommand(interaction: ChatInputCommandInter
       try {
         const recipient = user || await interaction.client.users.fetch(userId);
         if (action === "clearwarnings") {
-          const embed = new EmbedBuilder().setColor(0xf45f77).setDescription(`Warning '${clearedWarningReason}' has been cleared from you`);
-          await recipient.send({ embeds: [embed], allowedMentions: { parse: [] } });
+          await recipient.send(moderationDm(`Warning '${clearedWarningReason}' has been cleared from you`));
         } else if (action === "warn") {
-          const embed = new EmbedBuilder().setColor(0xf45f77)
-            .setDescription(`You were warned in ${guild.name} for ${reason}${messageLinks.length ? `\n\n${messageLinks.join("\n")}` : ""}`);
-          await recipient.send({ embeds: [embed], allowedMentions: { parse: [] } });
+          await recipient.send(moderationDm(`You were warned in ${guild.name} for ${reason}`, dmMessageText));
         } else {
-          const embed = new EmbedBuilder().setColor(0xf45f77)
-            .setDescription(`${notificationLabels[recordedAction]} ${["kick", "softban", "ban"].includes(recordedAction) ? "from" : "in"} ${guild.name}.\nReason: ${action === "timeout" ? recordedReason : reason}${recordedAction === "softban" ? "\nYou can rejoin the server." : ""}${messageLinks.length ? `\n\n${messageLinks.join("\n")}` : ""}`);
-          await recipient.send({ embeds: [embed], allowedMentions: { parse: [] } });
+          const description = `${notificationLabels[recordedAction]} ${["kick", "softban", "ban"].includes(recordedAction) ? "from" : "in"} ${guild.name}.\nReason: ${action === "timeout" ? recordedReason : reason}${recordedAction === "softban" ? "\nYou can rejoin the server." : ""}`;
+          await recipient.send(moderationDm(description, dmMessageText));
         }
         dmStatus = "";
       } catch (error) {

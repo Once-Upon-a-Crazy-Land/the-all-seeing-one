@@ -190,7 +190,7 @@ export async function handleAutoModAction(execution: AutoModerationActionExecuti
     ? await eligibleWarningActor(execution, ruleSettings.warning_actor_id) : null;
   const result = action.type === Action.Timeout
     ? recordAutoModTimeout(guild, userId, reason, (action.metadata.durationSeconds ?? 0) / 60)
-    : await recordAutoModCase(guild, userId, reason, settings, actor);
+    : await recordAutoModCase(guild, userId, reason, settings, actor, execution.content);
   if (!settings.log_channel_id) return;
   const channel = await guild.channels.fetch(settings.log_channel_id);
   if (!channel?.isSendable()) throw new Error("Moderation log channel unavailable");

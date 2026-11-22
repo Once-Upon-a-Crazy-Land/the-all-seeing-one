@@ -161,15 +161,16 @@ test('message and member Apps commands show the selected text in private modlogs
   assert.equal(row.message_text, message.content);
   const messageUrl = `https://discord.com/channels/${h.guild.id}/${channelId}/${message.id}`;
   assert.deepEqual(JSON.parse(row.message_links), [messageUrl]);
-  assert.match(content(h.events.find(event => event[0] === 'dm')[1]), /Linked warning/);
+  const quotedMessage = `"${discord.escapeMarkdown(message.content)}"`;
+  const warning = content(h.events.find(event => event[0] === 'dm')[1]);
+  assert.equal(warning, `You were warned in Server for Linked warning\n\n${quotedMessage}`);
 
   const logs = menuInteraction(h, 'Modlogs');
   await h.api.handleModerationContextCommand(logs);
   assert.equal(logs.replyFlags, discord.MessageFlags.Ephemeral);
   const modlogs = content(h.responses.at(-1));
   assert.match(modlogs, /Linked warning/);
-  assert.match(modlogs, /Original text\nwith \*\*formatting\*\* and/);
-  assert.equal(modlogs.match(/```/g).length, 2);
+  assert(modlogs.includes(`**Message**\n${quotedMessage}`));
   assert(!modlogs.includes(messageUrl));
   assert.equal(messageReads, 0);
   assert(!('message_text' in h.api.moderationCases(h.guild.id)[0]));
@@ -194,6 +195,9 @@ test('message and member Apps commands show the selected text in private modlogs
     assert.equal(record.user_id, h.user.id);
     assert.deepEqual(JSON.parse(record.message_links), [`https://discord.com/channels/${h.guild.id}/${channelId}/${selectedMessage.id}`]);
     assert.equal(record.message_text, selectedMessage.content);
+    const dm = h.events.filter(([type]) => type === 'dm').at(-1)[1];
+    assert.equal(dm.embeds[0].toJSON().color, 0xf45f77);
+    assert(content(dm).endsWith(`\n\n${quotedMessage}`));
   }
 
   h.setActor(false);
@@ -228,7 +232,7 @@ test('modlogs read older link-only cases and respect private thread membership',
         messageReads++;
         assert.equal(message, messageId);
         if (sourceText === null) throw Error('Message deleted');
-        return { content: sourceText };
+        return { content: sourceText, author: h.user };
       } }
     };
   };
@@ -238,7 +242,7 @@ test('modlogs read older link-only cases and respect private thread membership',
   joined = true;
   await h.api.handleModerationContextCommand(menuInteraction(h, 'Modlogs'));
   assert.equal(messageReads, 1);
-  assert(content(h.responses.at(-1)).includes(sourceText));
+  assert(content(h.responses.at(-1)).includes(`"${sourceText}"`));
   sourceText = null;
   await h.api.handleModerationContextCommand(menuInteraction(h, 'Modlogs'));
   assert.match(content(h.responses.at(-1)), /Message unavailable\./);
@@ -251,7 +255,7 @@ test('modlogs read older link-only cases and respect private thread membership',
   await h.api.handleModerationContextCommand(menuInteraction(h, 'Modlogs'));
   const longPage = h.responses.at(-1).components[0].toJSON().components.filter(component => component.type === discord.ComponentType.TextDisplay);
   assert(longPage.reduce((total, component) => total + component.content.length, 0) <= 4000);
-  assert.equal(longPage.filter(component => component.content.includes('...\n```')).length, 4);
+  assert.equal(longPage.filter(component => component.content.endsWith('..."')).length, 4);
   h.db.close();
 });
 
@@ -276,6 +280,38 @@ test('softban removes 24 hours of messages and records a ban if the unban fails'
   assert.match(content(log), /still banned/);
   assert.match(content(h.events.filter(event => event[0] === 'dm').at(-1)[1]), /^Banned from Server/);
   assert.doesNotMatch(content(h.events.filter(event => event[0] === 'dm').at(-1)[1]), /failed/);
+  h.db.close();
+});
+
+test('moderation DMs quote pasted evidence only when it belongs to the recipient', async () => {
+  const h = setup();
+  const channelId = '666666666666666666';
+  const messageId = '777777777777777777';
+  const url = `https://discord.com/channels/${h.guild.id}/${channelId}/${messageId}`;
+  let message = { author: h.user, content: 'i hate banana' };
+  h.guild.channels.fetch = async () => ({
+    isTextBased: () => true,
+    permissionsFor: () => ({ has: () => true }),
+    messages: { fetch: async () => message }
+  });
+  const softban = async () => {
+    await h.api.handleModerationContextCommand(menuInteraction(h, 'Softban'));
+    const submit = h.interaction('', { 'message-links': url });
+    submit.customId = h.events.at(-1)[1].custom_id;
+    await h.api.handleModerationCommand(submit);
+    return content(h.events.filter(([type]) => type === 'dm').at(-1)[1]);
+  };
+  const description = 'Removed from Server.\nReason: Rule violation\nYou can rejoin the server.';
+  assert.equal(await softban(), `${description}\n\n"i hate banana"`);
+  message = { author: h.actor, content: 'Private moderator note' };
+  assert.equal(await softban(), description);
+  assert.equal(h.db.prepare('SELECT message_text FROM moderation_cases ORDER BY id DESC LIMIT 1').get().message_text, message.content);
+  message = { author: h.user, content: '**🌴** '.repeat(550) };
+  const longDm = await softban();
+  assert(longDm.length <= 4096);
+  assert(longDm.endsWith('..."'));
+  message = null;
+  assert.equal(await softban(), description);
   h.db.close();
 });
 
@@ -487,7 +523,7 @@ test('honeypot softbans once, skips exempt accounts, and records failed unban as
   member.id = h.user.id;
   member.permissions = { has: () => false };
   member.roles.cache = new Map();
-  const message = { delete: async () => h.events.push(['delete']), guild: h.guild, author: h.user, channelId: 'trap', url: 'https://discord.com/channels/guild/trap/message', client: { user: { username: 'Bot' } } };
+  const message = { delete: async () => h.events.push(['delete']), guild: h.guild, author: h.user, content: 'Honeypot post', channelId: 'trap', url: 'https://discord.com/channels/guild/trap/message', client: { user: { username: 'Bot' } } };
   assert.equal(await h.api.handleHoneypotMessage({ ...message, channelId: 'other' }), false);
   assert.equal(await h.api.handleHoneypotMessage({ ...message, author: { ...h.user, bot: true } }), false);
   assert.equal(await h.api.handleHoneypotMessage({ ...message, webhookId: 'webhook' }), false);
@@ -502,11 +538,11 @@ test('honeypot softbans once, skips exempt accounts, and records failed unban as
   await Promise.all([h.api.handleHoneypotMessage(message), h.api.handleHoneypotMessage(message)]);
   assert.deepEqual(h.events.filter(e => ['dm','ban','unban'].includes(e[0])).map(e => e[0]), ['dm','ban','unban']);
   const dm = h.events.find(e => e[0] === 'dm')[1];
-  assert.equal(dm.flags, discord.MessageFlags.IsComponentsV2);
-  assert.equal(dm.components[0].toJSON().accent_color, 0xf45f77);
-  assert.equal(content(dm), 'You were banned from Server for posting in a honeypot channel.');
+  assert.equal(dm.embeds[0].toJSON().color, 0xf45f77);
+  assert.equal(content(dm), 'You were banned from Server for posting in a honeypot channel.\n\n"Honeypot post"');
   assert.deepEqual(h.events.filter(e => ['ban','unban'].includes(e[0])).map(e => e[0]), ['ban','unban']);
   assert.equal(h.db.prepare('SELECT action FROM moderation_cases').get().action, 'softban');
+  assert.equal(h.db.prepare('SELECT message_text FROM moderation_cases').get().message_text, message.content);
   h.guild.bans.remove = async () => { throw Error('Network failure'); };
   await h.api.handleHoneypotMessage(message);
   assert.equal(h.db.prepare('SELECT action FROM moderation_cases ORDER BY id DESC LIMIT 1').get().action, 'ban');
@@ -550,7 +586,7 @@ test('AutoMod records blocks and native timeouts and issues warnings only for op
   const { BlockMessage, Timeout, SendAlertMessage } = discord.AutoModerationActionType;
   const fire = (type, metadata = {}) => context.exports.handleAutoModAction({
     guild: h.guild, user: h.user, userId: h.user.id, ruleId, channelId: '777777777777777777',
-    action: { type, metadata }, autoModerationRule: { name: 'Invite links' }
+    action: { type, metadata }, autoModerationRule: { name: 'Invite links' }, content: 'Blocked message'
   });
 
   await fire(BlockMessage);
@@ -565,7 +601,7 @@ test('AutoMod records blocks and native timeouts and issues warnings only for op
   assert.deepEqual(Array.from(h.api.moderationCases(h.guild.id), row => row.action), ['warn', 'timeout', 'automod']);
   assert.equal(h.events.filter(([type]) => type === 'dm').length, 1);
   assert.equal(h.events.filter(([type]) => type === 'log').length, 3);
-  assert.match(content(h.events.find(([type]) => type === 'dm')[1]), /^You were warned in Server for triggering AutoMod rule/);
+  assert.equal(content(h.events.find(([type]) => type === 'dm')[1]), 'You were warned in Server for triggering AutoMod rule "Invite links"\n\n"Blocked message"');
   for (const [, payload] of h.events.filter(([type]) => type === 'log')) {
     assert.equal(payload.embeds[0].toJSON().color, 0xf45f77);
   }
