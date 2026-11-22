@@ -81,7 +81,7 @@ function setup() {
   function interaction(action, fields = {}, type = 'modal') {
     return { commandName: 'mod', customId: `moderation:${action}:${actor.id}`, guild, guildId: guild.id, user: { id: actor.id, tag: 'Moderator' }, memberPermissions: actor.permissions, deferred: false,
       isButton: () => type === 'button', isStringSelectMenu: () => type === 'select', isModalSubmit: () => type === 'modal',
-      options: { getString: () => action }, fields: { getSelectedUsers: () => ({ first: () => user }), getTextInputValue: name => fields[name] ?? (name === 'reason' ? 'Rule violation' : ''), getStringSelectValues: () => [fields.action] },
+      options: { getString: () => action }, fields: { getSelectedUsers: () => ({ first: () => user }), getTextInputValue: name => fields[name] ?? (name === 'reason' ? 'Rule violation' : '') },
       client: { users: { fetch: async id => id === user.id ? user : { username: 'Moderator' } } },
       deferReply: async function (options) { this.deferred = true; this.replyFlags = options?.flags; }, deferUpdate: async function () { this.deferred = true; events.push(['defer']); },
       reply: async payload => responses.push(payload), editReply: async payload => responses.push(payload), showModal: async modal => events.push(['modal', modal.toJSON()]),
@@ -104,23 +104,45 @@ function menuInteraction(h, name, message) {
   return interaction;
 }
 
-test('message Mod and member Apps commands route to private moderation flows', async () => {
+test('message and member Apps commands open private moderation flows and show evidence links in modlogs', async () => {
   const h = setup();
   const commands = h.api.moderationCommands.map(command => command.toJSON());
-  assert.deepEqual(Array.from(commands.filter(command => command.type === 3), command => command.name), ['Mod', 'Purge']);
-  assert.deepEqual(Array.from(commands.filter(command => command.type === 2), command => command.name), ['Modlogs', 'Timeout', 'Warn', 'Kick', 'Softban', 'Ban', 'Clear Warning']);
+  const defaultPermissions = type => Object.fromEntries(Array.from(commands.filter(command => command.type === type),
+    command => [command.name, BigInt(command.default_member_permissions)]));
+  const { ModerateMembers, ManageMessages, KickMembers, BanMembers } = discord.PermissionFlagsBits;
+  assert.deepEqual(defaultPermissions(discord.ApplicationCommandType.Message), {
+    Warn: ModerateMembers, Timeout: ModerateMembers, Kick: KickMembers, Softban: BanMembers, Ban: BanMembers, Purge: ManageMessages
+  });
+  assert.deepEqual(defaultPermissions(discord.ApplicationCommandType.User), {
+    Modlogs: ModerateMembers, Timeout: ModerateMembers, Warn: ModerateMembers, Kick: KickMembers,
+    Softban: BanMembers, Ban: BanMembers, 'Clear Warning': ModerateMembers
+  });
   const message = { id: '777777777777777777', author: h.user };
   const channelId = '666666666666666666';
-  await h.api.handleModerationContextCommand(menuInteraction(h, 'Mod', message));
-  const modal = h.events.at(-1)[1];
-  const pick = modal.components.find(component => component.component?.custom_id === 'action').component;
-  assert.deepEqual(Array.from(pick.options, option => option.label), ['Modlogs', 'Timeout', 'Warn', 'Kick', 'Softban', 'Ban']);
-  const submit = h.interaction('', { action: 'warn', reason: 'Linked warning' });
-  submit.customId = modal.custom_id;
-  submit.channelId = channelId;
-  submit.fields.getSelectedUsers = () => { throw Error('Message target should be fixed'); };
-  await h.api.handleModerationCommand(submit);
-  assert.equal(submit.replyFlags, discord.MessageFlags.Ephemeral);
+  for (const [label, action] of [['Warn', 'warn'], ['Timeout', 'timeout'], ['Kick', 'kick'], ['Softban', 'softban'], ['Ban', 'ban']]) {
+    assert.equal(await h.api.handleModerationContextCommand(menuInteraction(h, label, message)), true);
+    const modal = h.events.at(-1)[1];
+    assert.equal(modal.custom_id, `moderation:${action}:${h.actor.id}:${h.user.id}:${message.id}`);
+    assert(!modal.components.some(component => ['action', 'member', 'message-links'].includes(component.component?.custom_id)));
+  }
+  assert.equal(await h.api.handleModerationContextCommand(menuInteraction(h, 'Mod', message)), false);
+
+  const fixedTarget = () => { throw Error('Message target should be fixed'); };
+  async function submitMessageAction(label, selectedMessage, fields) {
+    await h.api.handleModerationContextCommand(menuInteraction(h, label, selectedMessage));
+    const submit = h.interaction('', fields);
+    submit.customId = h.events.at(-1)[1].custom_id;
+    submit.channelId = channelId;
+    submit.fields.getSelectedUsers = fixedTarget;
+    const getTextInputValue = submit.fields.getTextInputValue;
+    submit.fields.getTextInputValue = name => {
+      assert.notEqual(name, 'message-links');
+      return getTextInputValue(name);
+    };
+    await h.api.handleModerationCommand(submit);
+    assert.equal(submit.replyFlags, discord.MessageFlags.Ephemeral);
+  }
+  await submitMessageAction('Warn', message, { reason: 'Linked warning' });
   const row = h.db.prepare('SELECT id,user_id,message_links FROM moderation_cases').get();
   assert.equal(row.user_id, h.user.id);
   const messageUrl = `https://discord.com/channels/${h.guild.id}/${channelId}/${message.id}`;
@@ -131,20 +153,30 @@ test('message Mod and member Apps commands route to private moderation flows', a
   await h.api.handleModerationContextCommand(logs);
   assert.equal(logs.replyFlags, discord.MessageFlags.Ephemeral);
   assert.match(content(h.responses.at(-1)), /Linked warning/);
+  assert(content(h.responses.at(-1)).includes(`[View message](${messageUrl})`));
 
   await h.api.handleModerationContextCommand(menuInteraction(h, 'Clear Warning'));
   const clear = h.interaction('', { 'case-number': String(row.id) });
   clear.customId = h.events.at(-1)[1].custom_id;
-  clear.fields.getSelectedUsers = submit.fields.getSelectedUsers;
+  clear.fields.getSelectedUsers = fixedTarget;
   await h.api.handleModerationCommand(clear);
   assert.equal(h.db.prepare('SELECT cleared FROM moderation_cases WHERE id=?').get(row.id).cleared, 1);
 
+  for (const [label, action] of [['Timeout', 'timeout'], ['Kick', 'kick'], ['Softban', 'softban'], ['Ban', 'ban']]) {
+    const selectedMessage = { ...message, id: (BigInt(message.id) + BigInt(label.length)).toString() };
+    await submitMessageAction(label, selectedMessage, { minutes: '10' });
+    const record = h.db.prepare('SELECT user_id, message_links FROM moderation_cases WHERE action=?').get(action);
+    assert.equal(record.user_id, h.user.id);
+    assert.deepEqual(JSON.parse(record.message_links), [`https://discord.com/channels/${h.guild.id}/${channelId}/${selectedMessage.id}`]);
+  }
+
   h.setActor(false);
-  const unauthorized = menuInteraction(h, 'Mod', message);
-  unauthorized.memberPermissions = new discord.PermissionsBitField(discord.PermissionFlagsBits.KickMembers);
-  await h.api.handleModerationContextCommand(unauthorized);
-  const kickOnly = h.events.at(-1)[1].components.find(component => component.component?.custom_id === 'action').component;
-  assert.deepEqual(Array.from(kickOnly.options, option => option.label), ['Kick']);
+  const kicker = menuInteraction(h, 'Kick', message);
+  kicker.memberPermissions = new discord.PermissionsBitField(KickMembers);
+  await h.api.handleModerationContextCommand(kicker);
+  assert.equal(h.events.at(-1)[1].title, 'Kick member');
+  await h.api.handleModerationContextCommand({ ...kicker, commandName: 'Ban' });
+  assert.equal(h.responses.at(-1).flags, discord.MessageFlags.IsComponentsV2 | discord.MessageFlags.Ephemeral);
   await h.api.handleModerationContextCommand(menuInteraction(h, 'Softban'));
   assert.equal(h.responses.at(-1).flags, discord.MessageFlags.IsComponentsV2 | discord.MessageFlags.Ephemeral);
   h.db.close();
