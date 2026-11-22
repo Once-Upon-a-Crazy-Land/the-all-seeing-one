@@ -1,6 +1,6 @@
 import { systemAvailable } from "./premium.js";
 import { xpRange } from "./xp-range.js";
-import { AttachmentBuilder, Client, Events, GatewayIntentBits, Partials, PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
+import { ApplicationCommandType, ApplicationIntegrationType, AttachmentBuilder, Client, ContextMenuCommandBuilder, Events, GatewayIntentBits, InteractionContextType, MessageFlags, Partials, PermissionFlagsBits, SlashCommandBuilder, type ChatInputCommandInteraction, type UserContextMenuCommandInteraction } from "discord.js";
 import { config } from "./config.js";
 import { db, ensureDefaultSystem, levelFromXp, systemModuleEnabled, xpForLevel } from "./db.js";
 import { renderLevelCard } from "./level-card.js";
@@ -8,7 +8,7 @@ import { sendMemberCard } from "./welcome.js";
 import { assignAutoRoles, startAutoRoleExpiry } from "./auto-roles.js";
 import { economyCommands, handleEconomyCommand, rewardEconomyMessage } from "./economy.js";
 
-import { moderationCommands, handleModerationCommand, handleHoneypotMessage, handleDiscordTimeout } from "./moderation.js";
+import { moderationCommands, handleModerationCommand, handleModerationContextCommand, handleHoneypotMessage, handleDiscordTimeout } from "./moderation.js";
 import { handleAutoModAction } from "./automod.js";
 
 export const bot = new Client({
@@ -159,42 +159,59 @@ const levelCommand = new SlashCommandBuilder()
   .setDescription("Show a member's level and XP progress")
   .addUserOption(option => option.setName("member").setDescription("Member to view (defaults to you)"))
   .addStringOption(option => option.setName("system").setDescription("Leveling system to view").setAutocomplete(true));
+const viewLevelCommand = new ContextMenuCommandBuilder().setName("View Level").setType(ApplicationCommandType.User)
+  .setContexts(InteractionContextType.Guild).setIntegrationTypes(ApplicationIntegrationType.GuildInstall);
 
 bot.on(Events.InteractionCreate, async interaction => {
   try {
-  if (interaction.isAutocomplete() && interaction.commandName === "level") {
-    if (!interaction.guildId || !systemModuleEnabled(interaction.guildId, "levels")) return interaction.respond([]);
-    ensureDefaultSystem(interaction.guildId);
-    const query = interaction.options.getFocused().toLowerCase();
-    const systems = db.prepare("SELECT id, name FROM leveling_systems WHERE guild_id=? ORDER BY id").all(interaction.guildId) as Array<{ id: number; name: string }>;
-    await interaction.respond(systems.filter(system => system.name.toLowerCase().includes(query) && systemAvailable(interaction.guildId!, "leveling", system.id)).slice(0, 25).map(system => ({ name: system.name, value: String(system.id) })));
-    return;
-  }
-  if (interaction.isModalSubmit()) {
-    if (await handleModerationCommand(interaction)) return;
-    await handleEconomyCommand(interaction);
-    return;
-  }
-  if (interaction.isStringSelectMenu() || interaction.isButton()) {
+    if (interaction.isAutocomplete() && interaction.commandName === "level") {
+      if (!interaction.guildId || !systemModuleEnabled(interaction.guildId, "levels")) return interaction.respond([]);
+      ensureDefaultSystem(interaction.guildId);
+      const query = interaction.options.getFocused().toLowerCase();
+      const systems = db.prepare("SELECT id, name FROM leveling_systems WHERE guild_id=? ORDER BY id").all(interaction.guildId) as Array<{ id: number; name: string }>;
+      await interaction.respond(systems.filter(system => system.name.toLowerCase().includes(query) && systemAvailable(interaction.guildId!, "leveling", system.id)).slice(0, 25).map(system => ({ name: system.name, value: String(system.id) })));
+      return;
+    }
+    if (interaction.isContextMenuCommand()) {
+      if (await handleModerationContextCommand(interaction)) return;
+      if (interaction.isUserContextMenuCommand() && interaction.commandName === viewLevelCommand.name) await showLevel(interaction);
+      return;
+    }
+    if (interaction.isModalSubmit() || interaction.isStringSelectMenu() || interaction.isButton()) {
+      if (await handleModerationCommand(interaction)) return;
+      await handleEconomyCommand(interaction);
+      return;
+    }
+    if (!interaction.isChatInputCommand() || !interaction.guild) return;
     if (await handleModerationCommand(interaction)) return;
     if (await handleEconomyCommand(interaction)) return;
+    if (interaction.commandName === "level") await showLevel(interaction);
+  } catch (error) {
+    console.error("Interaction failed", error);
+    if (!interaction.isRepliable()) return;
+    const content = "Something went wrong while processing that command.";
+    const message = { content, flags: MessageFlags.Ephemeral } as const;
+    if (interaction.deferred && !interaction.replied && interaction.ephemeral) await interaction.editReply({ content }).catch(console.error);
+    else if (interaction.deferred || interaction.replied) await interaction.followUp(message).catch(console.error);
+    else await interaction.reply(message).catch(console.error);
   }
-  if (!interaction.isChatInputCommand() || !interaction.guild) return;
-  if (await handleModerationCommand(interaction)) return;
-  if (await handleEconomyCommand(interaction)) return;
-  if (interaction.commandName !== "level") return;
+});
+
+async function showLevel(interaction: ChatInputCommandInteraction | UserContextMenuCommandInteraction) {
+  if (!interaction.guild) return;
   if (!systemModuleEnabled(interaction.guild.id, "levels")) {
-    return interaction.reply({ content: "Levels is disabled on this server.", ephemeral: true });
+    return interaction.reply({ content: "Levels is disabled on this server.", flags: MessageFlags.Ephemeral });
   }
-  await interaction.deferReply();
+  const fromMemberMenu = interaction.isUserContextMenuCommand();
+  await interaction.deferReply(fromMemberMenu ? { flags: MessageFlags.Ephemeral } : undefined);
   ensureDefaultSystem(interaction.guild.id);
-  const requestedId = Number(interaction.options.getString("system"));
+  const requestedId = fromMemberMenu ? 0 : Number(interaction.options.getString("system"));
   const system = (Number.isFinite(requestedId) && requestedId > 0
     ? db.prepare("SELECT id, name FROM leveling_systems WHERE id=? AND guild_id=?").get(requestedId, interaction.guild.id)
     : db.prepare("SELECT id, name FROM leveling_systems WHERE guild_id=? ORDER BY id LIMIT 1").get(interaction.guild.id)) as { id: number; name: string } | undefined;
   if (!system) return interaction.editReply("That leveling system no longer exists.");
   if (!systemAvailable(interaction.guild.id, "leveling", system.id)) return interaction.editReply("That leveling system is paused until this server has Premium.");
-  const user = interaction.options.getUser("member") ?? interaction.user;
+  const user = fromMemberMenu ? interaction.targetUser : interaction.options.getUser("member") ?? interaction.user;
   const profileUser = await user.fetch(true).catch(() => user);
   const member = await interaction.guild.members.fetch(user.id).catch(() => null);
   const nameplate = member?.collectibles?.nameplate ?? profileUser.collectibles?.nameplate;
@@ -227,14 +244,7 @@ bot.on(Events.InteractionCreate, async interaction => {
   const image = await renderLevelCard(cardData);
   if (!systemAvailable(interaction.guild.id, "leveling", system.id)) return interaction.editReply("That leveling system is paused until this server has Premium.");
   await interaction.editReply({ files: [new AttachmentBuilder(image, { name: `level-${user.id}.png` })] });
-  } catch (error) {
-    console.error("Interaction failed", error);
-    if (!interaction.isRepliable()) return;
-    const message = { content: "Something went wrong while processing that command.", ephemeral: true } as const;
-    if (interaction.deferred || interaction.replied) await interaction.followUp(message).catch(console.error);
-    else await interaction.reply(message).catch(console.error);
-  }
-});
+}
 
 bot.once(Events.ClientReady, async client => {
   startAutoRoleExpiry(client);
@@ -242,7 +252,7 @@ bot.once(Events.ClientReady, async client => {
   const serverCount = serverNames.length;
   console.log(`Discord bot ready as ${client.user.tag} in ${serverCount} ${serverCount === 1 ? "server" : "servers"}`);
   console.log(`Discord server names: ${JSON.stringify(serverNames)}`);
-  await client.application.commands.set([levelCommand.toJSON(), ...economyCommands.map(command => command.toJSON()), ...moderationCommands.map(command => command.toJSON())]);
+  await client.application.commands.set([levelCommand, viewLevelCommand, ...economyCommands, ...moderationCommands].map(command => command.toJSON()));
 });
 
 bot.on(Events.GuildCreate, async guild => {

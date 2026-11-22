@@ -77,13 +77,13 @@ function setup() {
   const actor = { id: '111111111111111111', user: { username: 'Moderator' }, permissions: { has: () => actorAllowed }, roles: { highest: { comparePositionTo: () => higherRole ? -1 : 1 } } };
   const target = { roles: { highest: {} }, moderatable: true, kickable: true, bannable: true, timeout: async value => events.push(['timeout', value]), kick: async () => events.push(['kick']) };
   const me = { id: '333333333333333333', permissions: { has: () => botAllowed }, roles: { highest: { comparePositionTo: () => 1 } } };
-  const guild = { id: '444444444444444444', name: 'Server', ownerId: '555555555555555555', members: { fetch: async id => { if (id === actor.id) return actor; if (targetError) throw targetError; return target; }, fetchMe: async () => me, ban: async () => events.push(['ban']) }, bans: { remove: async () => events.push(['unban']) }, channels: { fetch: async () => ({ isSendable: () => true, send: async payload => events.push(['log', payload]) }) } };
+  const guild = { id: '444444444444444444', name: 'Server', ownerId: '555555555555555555', members: { fetch: async id => { if (id === actor.id) return actor; if (targetError) throw targetError; return target; }, fetchMe: async () => me, ban: async (_id, options) => events.push(['ban', options]) }, bans: { remove: async () => events.push(['unban']) }, channels: { fetch: async () => ({ isSendable: () => true, send: async payload => events.push(['log', payload]) }) } };
   function interaction(action, fields = {}, type = 'modal') {
     return { commandName: 'mod', customId: `moderation:${action}:${actor.id}`, guild, guildId: guild.id, user: { id: actor.id, tag: 'Moderator' }, memberPermissions: actor.permissions, deferred: false,
       isButton: () => type === 'button', isStringSelectMenu: () => type === 'select', isModalSubmit: () => type === 'modal',
-      options: { getString: () => action }, fields: { getSelectedUsers: () => ({ first: () => user }), getTextInputValue: name => fields[name] ?? (name === 'reason' ? 'Rule violation' : '') },
+      options: { getString: () => action }, fields: { getSelectedUsers: () => ({ first: () => user }), getTextInputValue: name => fields[name] ?? (name === 'reason' ? 'Rule violation' : ''), getStringSelectValues: () => [fields.action] },
       client: { users: { fetch: async id => id === user.id ? user : { username: 'Moderator' } } },
-      deferReply: async function () { this.deferred = true; }, deferUpdate: async function () { this.deferred = true; events.push(['defer']); },
+      deferReply: async function (options) { this.deferred = true; this.replyFlags = options?.flags; }, deferUpdate: async function () { this.deferred = true; events.push(['defer']); },
       reply: async payload => responses.push(payload), editReply: async payload => responses.push(payload), showModal: async modal => events.push(['modal', modal.toJSON()]),
       channelId: 'channel', channel: { permissionsFor: () => ({ has: () => true }), bulkDelete: async amount => { events.push(['purge', amount]); return { size: amount }; } }
     };
@@ -93,6 +93,127 @@ function setup() {
   return { db, api: context.exports, events, responses, interaction, actor, user, guild, setActor: v => actorAllowed = v, setBot: v => botAllowed = v, failDM: () => dmFails = true, targetError: v => targetError = v, higherRole: () => higherRole = true };
 }
 const content = payload => payload.components ? payload.components.flatMap(c => c.toJSON().components.filter(v => v.type === 10).map(v => v.content)).join('\n') : payload.embeds.map(e => e.toJSON().description).join('\n');
+
+function menuInteraction(h, name, message) {
+  const interaction = h.interaction('', {}, 'command');
+  interaction.commandName = name;
+  interaction.isMessageContextMenuCommand = () => !!message;
+  interaction.targetMessage = message;
+  interaction.targetUser = h.user;
+  interaction.targetId = message?.id ?? h.user.id;
+  return interaction;
+}
+
+test('message Mod and member Apps commands route to private moderation flows', async () => {
+  const h = setup();
+  const commands = h.api.moderationCommands.map(command => command.toJSON());
+  assert.deepEqual(Array.from(commands.filter(command => command.type === 3), command => command.name), ['Mod', 'Purge']);
+  assert.deepEqual(Array.from(commands.filter(command => command.type === 2), command => command.name), ['Modlogs', 'Timeout', 'Warn', 'Kick', 'Softban', 'Ban', 'Clear Warning']);
+  const message = { id: '777777777777777777', author: h.user };
+  const channelId = '666666666666666666';
+  await h.api.handleModerationContextCommand(menuInteraction(h, 'Mod', message));
+  const modal = h.events.at(-1)[1];
+  const pick = modal.components.find(component => component.component?.custom_id === 'action').component;
+  assert.deepEqual(Array.from(pick.options, option => option.label), ['Modlogs', 'Timeout', 'Warn', 'Kick', 'Softban', 'Ban']);
+  const submit = h.interaction('', { action: 'warn', reason: 'Linked warning' });
+  submit.customId = modal.custom_id;
+  submit.channelId = channelId;
+  submit.fields.getSelectedUsers = () => { throw Error('Message target should be fixed'); };
+  await h.api.handleModerationCommand(submit);
+  assert.equal(submit.replyFlags, discord.MessageFlags.Ephemeral);
+  const row = h.db.prepare('SELECT id,user_id,message_links FROM moderation_cases').get();
+  assert.equal(row.user_id, h.user.id);
+  const messageUrl = `https://discord.com/channels/${h.guild.id}/${channelId}/${message.id}`;
+  assert.deepEqual(JSON.parse(row.message_links), [messageUrl]);
+  assert.match(content(h.events.find(event => event[0] === 'dm')[1]), /Linked warning/);
+
+  const logs = menuInteraction(h, 'Modlogs');
+  await h.api.handleModerationContextCommand(logs);
+  assert.equal(logs.replyFlags, discord.MessageFlags.Ephemeral);
+  assert.match(content(h.responses.at(-1)), /Linked warning/);
+
+  await h.api.handleModerationContextCommand(menuInteraction(h, 'Clear Warning'));
+  const clear = h.interaction('', { 'case-number': String(row.id) });
+  clear.customId = h.events.at(-1)[1].custom_id;
+  clear.fields.getSelectedUsers = submit.fields.getSelectedUsers;
+  await h.api.handleModerationCommand(clear);
+  assert.equal(h.db.prepare('SELECT cleared FROM moderation_cases WHERE id=?').get(row.id).cleared, 1);
+
+  h.setActor(false);
+  const unauthorized = menuInteraction(h, 'Mod', message);
+  unauthorized.memberPermissions = new discord.PermissionsBitField(discord.PermissionFlagsBits.KickMembers);
+  await h.api.handleModerationContextCommand(unauthorized);
+  const kickOnly = h.events.at(-1)[1].components.find(component => component.component?.custom_id === 'action').component;
+  assert.deepEqual(Array.from(kickOnly.options, option => option.label), ['Kick']);
+  await h.api.handleModerationContextCommand(menuInteraction(h, 'Softban'));
+  assert.equal(h.responses.at(-1).flags, discord.MessageFlags.IsComponentsV2 | discord.MessageFlags.Ephemeral);
+  h.db.close();
+});
+
+test('softban removes 24 hours of messages and records a ban if the unban fails', async () => {
+  const h = setup();
+  h.db.prepare('UPDATE moderation_settings SET log_channel_id=?').run('log');
+  await h.api.handleModerationContextCommand(menuInteraction(h, 'Softban'));
+  const submit = h.interaction('');
+  submit.customId = h.events.at(-1)[1].custom_id;
+  await h.api.handleModerationCommand(submit);
+  assert.equal(h.events.find(event => event[0] === 'ban')[1].deleteMessageSeconds, 86400);
+  assert(h.events.some(event => event[0] === 'unban'));
+  assert.equal(h.db.prepare('SELECT action FROM moderation_cases WHERE id=1').get().action, 'softban');
+  assert.match(content(h.events.find(event => event[0] === 'dm')[1]), /You can rejoin/);
+
+  h.guild.bans.remove = async () => { throw Error('Discord rejected unban'); };
+  await h.api.handleModerationCommand(h.interaction('softban'));
+  assert.equal(h.db.prepare('SELECT action FROM moderation_cases WHERE id=2').get().action, 'ban');
+  assert.match(content(h.responses.at(-1)), /still banned/);
+  const log = h.events.filter(event => event[0] === 'log').at(-1)[1];
+  assert.equal(log.embeds[0].toJSON().color, 0xf45f77);
+  assert.match(content(log), /still banned/);
+  assert.match(content(h.events.filter(event => event[0] === 'dm').at(-1)[1]), /^Banned from Server/);
+  assert.doesNotMatch(content(h.events.filter(event => event[0] === 'dm').at(-1)[1]), /failed/);
+  h.db.close();
+});
+
+test('Purge from here confirms and deletes only the bounded range in the channel', async () => {
+  const h = setup();
+  const now = Date.now();
+  const idAt = offset => discord.SnowflakeUtil.generate({ timestamp: now + offset }).toString();
+  const anchor = { id: idAt(-500), createdTimestamp: now - 500 };
+  const menu = menuInteraction(h, 'Purge', anchor);
+  menu.id = idAt(0);
+  await h.api.handleModerationContextCommand(menu);
+  const modal = h.events.at(-1)[1];
+  assert.equal(modal.title, 'Purge from here');
+  assert.equal(h.db.prepare('SELECT COUNT(*) n FROM moderation_cases').get().n, 0);
+
+  const submit = h.interaction('');
+  submit.customId = modal.custom_id;
+  submit.channelId = '666666666666666666';
+  const deleted = [];
+  const newer = idAt(-10);
+  let history = [idAt(1), newer, anchor.id, idAt(-501)];
+  submit.channel.messages = {
+    fetch: async ({ before, limit }) => new discord.Collection(history.filter(id => BigInt(id) < BigInt(before)).slice(0, limit)
+      .map(id => [id, { id, delete: async () => deleted.push(id) }]))
+  };
+  submit.channel.bulkDelete = async ids => { deleted.push(...ids); return { size: ids.length }; };
+  await h.api.handleModerationCommand(submit);
+  assert.deepEqual(deleted, [newer, anchor.id]);
+  assert.equal(submit.replyFlags, discord.MessageFlags.Ephemeral);
+  assert.match(content(h.responses.at(-1)), /Deleted 2 messages/);
+
+  history = Array.from({ length: 100 }, (_, index) => idAt(-index - 1)).concat(anchor.id);
+  await h.api.handleModerationCommand(submit);
+  assert.equal(deleted.length, 2);
+  assert.match(content(h.responses.at(-1)), /exceeds 100/);
+
+  history = [anchor.id];
+  await h.api.handleModerationCommand(submit);
+  assert.equal(deleted.at(-1), anchor.id);
+  assert.match(content(h.responses.at(-1)), /Deleted 1 message\./);
+  h.db.close();
+});
+
 test('warn -> escalation -> clear one -> separate histories; no errors leak into DMs', async () => {
   const h = setup();
   h.db.prepare('UPDATE moderation_settings SET log_channel_id=?,warning_rules=?').run('log', JSON.stringify([{ warnings: 2, action: 'kick' }, { warnings: 3, action: 'ban' }]));
