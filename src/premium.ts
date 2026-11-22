@@ -291,16 +291,23 @@ export async function handlePayPalWebhook(headers: Record<string,unknown>,event:
 }
 export function startPremiumSync() {
   startDiscordPremiumSync();
+  let previouslyMissingSubscriptions = new Set<string>();
   let running=false;
   const sync=async()=>{
     if(running||!checkoutAvailable())return;
     running=true;
     try {
       const rows=db.prepare("SELECT subscription_id,guild_id FROM premium_subscriptions WHERE approval_url LIKE ? AND status IN ('ACTIVE','APPROVED','SUSPENDED','APPROVAL_PENDING')").all(approvalUrlPattern()) as Array<{subscription_id:string;guild_id:string}>;
+      const missingSubscriptions = new Set<string>();
       for (const row of rows) {
         try {
           await serialized(row.guild_id, () => syncSubscription(row.subscription_id));
         } catch (error) {
+          if (error instanceof PayPalHttpError && error.message === "PayPal request failed"
+            && error.status === 404 && error.code === "RESOURCE_NOT_FOUND") {
+            missingSubscriptions.add(row.subscription_id);
+            if (previouslyMissingSubscriptions.has(row.subscription_id)) continue;
+          }
           const reason = error instanceof PayPalHttpError
             ? [error.message, `HTTP ${error.status}`, error.code, error.debugId && `debug ID ${error.debugId}`].filter(Boolean).join(", ")
             : error instanceof PayPalSubscriptionMismatch ? error.message
@@ -310,6 +317,7 @@ export function startPremiumSync() {
           console.error(`PayPal subscription reconciliation failed for server ${JSON.stringify(row.guild_id)} (${config.paypal.environment}) - ${reason}`);
         }
       }
+      previouslyMissingSubscriptions = missingSubscriptions;
     } finally {running=false;}
   };
   void sync();setInterval(()=>void sync(),5*60*1000).unref();

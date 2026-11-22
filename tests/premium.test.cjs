@@ -5,21 +5,27 @@ const vm=require('node:vm');
 const ts=require('typescript');
 const {DatabaseSync}=require('node:sqlite');
 const {EntitlementType,SKUFlags}=require('discord.js');
-function setup(discord = {}){
+function setup(discord = {}, logger = console){
  const db=new DatabaseSync(':memory:');
  db.exec("CREATE TABLE leveling_systems(id INTEGER PRIMARY KEY,guild_id TEXT); CREATE TABLE economy_systems(id INTEGER PRIMARY KEY,guild_id TEXT,deleted INTEGER DEFAULT 0); INSERT INTO leveling_systems VALUES(1,'g'),(2,'g'),(3,'g'); INSERT INTO economy_systems(id,guild_id)VALUES(1,'g'),(2,'g'),(3,'g');");
  const config={clientId:'application',discordPremiumSkuId:discord.skuId,paypal:{clientId:'client',clientSecret:'secret',webhookId:'hook',environment:'sandbox',planId:'P-PLAN'}};
  const requests=[];let status='ACTIVE',signature='SUCCESS',custom='g',plan='P-PLAN';
  const discordTimers=[];
+ const paypalTimers=[];
+ let subscriptionError;
  const REST=class { setToken(){return this} async get(...args){return discord.get(...args)} };
- const context={exports:{},require:name=>name==='node:crypto'?require('node:crypto'):name==='./config.js'?{config}:name==='discord.js'?{REST,EntitlementType,SKUFlags}:{db},Buffer,URL,URLSearchParams,Date,AbortSignal,console,setTimeout:callback=>{discordTimers.push(callback);return {unref(){}}},setInterval:()=>({unref(){}}),fetch:async(url,options)=>{
+ const context={exports:{},require:name=>name==='node:crypto'?require('node:crypto'):name==='./config.js'?{config}:name==='discord.js'?{REST,EntitlementType,SKUFlags}:{db},Buffer,URL,URLSearchParams,Date,AbortSignal,console:logger,setTimeout:callback=>{discordTimers.push(callback);return {unref(){}}},setInterval:callback=>{paypalTimers.push(callback);return {unref(){}}},fetch:async(url,options)=>{
   requests.push({url,options});
+  if (subscriptionError && url.includes('/v1/billing/subscriptions/')) {
+   const { status, name, debugId } = subscriptionError;
+   return Response.json({ name, debug_id: debugId }, { status });
+  }
   const approvalHost=config.paypal.environment==='live'?'www.paypal.com':'www.sandbox.paypal.com';
   let body=url.endsWith('/token')?{access_token:'token'}:url.endsWith('verify-webhook-signature')?{verification_status:signature}:url.endsWith('/v1/billing/subscriptions')?{id:'I-SUB',links:[{rel:'approve',href:'https://'+approvalHost+'/approve'}]}:{id:'I-SUB',status,plan_id:plan,custom_id:custom,billing_info:{next_billing_time:new Date(Date.now()+86400000).toISOString()}};
   return {ok:true,json:async()=>body};
  }};
  vm.createContext(context);vm.runInContext(ts.transpileModule(fs.readFileSync('src/premium.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,context);
- return {db,api:context.exports,config,requests,discordTimers,setStatus:v=>status=v,setSignature:v=>signature=v,setCustom:v=>custom=v,setPlan:v=>plan=v};
+ return {db,api:context.exports,config,requests,discordTimers,paypalTimers,setSubscriptionError:v=>subscriptionError=v,setStatus:v=>status=v,setSignature:v=>signature=v,setCustom:v=>custom=v,setPlan:v=>plan=v};
 }
 test('free limits, verified activation, expiry, and disabled checkout',async()=>{
  const h=setup();assert.equal(h.api.premiumStatus('g').systemLimit,2);assert(h.api.systemAvailable('g','leveling',2));assert(!h.api.systemAvailable('g','leveling',3));assert(!h.api.systemAvailable('g','economy',3));
@@ -63,6 +69,48 @@ test('live checkout and reconciliation skip stored sandbox subscriptions', async
  assert.equal(h.requests.filter(request => request.url.includes('/I-OLD')).length, 0);
  assert.equal(h.db.prepare('SELECT COUNT(*) AS count FROM premium_subscriptions').get().count, 2);
  h.db.close();
+});
+
+test('reconciliation logs continuous PayPal 404s once while continuing to verify the subscription', async () => {
+ const errors = [];
+ const h = setup({}, { error: message => errors.push(message) });
+ const flush = () => new Promise(resolve => setImmediate(resolve));
+ try {
+  h.config.paypal.environment = 'live';
+  await h.api.createPremiumSubscription('g', 'u', 'https://example.com');
+  await h.api.activatePremiumSubscription('I-SUB', 'g', 'u');
+  const check = h.db.prepare("SELECT status, valid_until FROM premium_subscriptions WHERE subscription_id = 'I-SUB'");
+  const verified = check.get();
+  h.requests.length = 0;
+
+  h.setSubscriptionError({ status: 404, name: 'RESOURCE_NOT_FOUND', debugId: 'first' });
+  h.api.startPremiumSync();
+  await flush();
+  h.setSubscriptionError({ status: 404, name: 'RESOURCE_NOT_FOUND', debugId: 'second' });
+  h.paypalTimers[0]();
+  await flush();
+  assert.equal(h.requests.filter(request => request.url.endsWith('/I-SUB')).length, 2);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /server "g" \(live\).*HTTP 404, RESOURCE_NOT_FOUND, debug ID first/);
+  assert.deepEqual(check.get(), verified);
+
+  h.setSubscriptionError(null);
+  h.paypalTimers[0]();
+  await flush();
+  h.setSubscriptionError({ status: 404, name: 'RESOURCE_NOT_FOUND', debugId: 'after-recovery' });
+  h.paypalTimers[0]();
+  await flush();
+  assert.equal(errors.length, 2);
+  assert.match(errors[1], /debug ID after-recovery/);
+
+  h.setSubscriptionError({ status: 503, name: 'SERVICE_UNAVAILABLE', debugId: 'outage' });
+  h.paypalTimers[0]();
+  await flush();
+  h.paypalTimers[0]();
+  await flush();
+  assert.equal(errors.length, 4);
+  assert.match(errors[3], /HTTP 503, SERVICE_UNAVAILABLE/);
+ } finally { h.db.close(); }
 });
 
 test('Discord subscriptions follow one server, can move or detach, and lose access on revocation', async () => {
