@@ -328,6 +328,9 @@ function editCreatorAlert(alert) {
   fields.message.value = alert?.message || creatorPostText;
   fields.name.value = alert?.name || '';
   creatorAlertAvatar.setValue(alert?.avatar);
+  setCreatorAvatarControls($('#creator-alert-avatar-url').closest('.creator-alert-avatar-field'), creatorAlertView?.customWebhookAvatars);
+  const avatarHelp = $('#creator-alert-avatar-url').closest('.creator-alert-avatar-field').querySelector('.creator-alert-avatar-help');
+  avatarHelp.textContent = creatorAlertView?.customWebhookAvatars ? 'Leave blank to use the platform default.' : 'Custom webhook avatars require Premium.';
   $('#creator-alert-editor-heading').textContent = alert ? 'Edit account' : 'Add an account';
   creatorAlertSave.textContent = alert ? 'Done' : 'Add account';
   savedCreatorAlertBody = alert ? JSON.stringify(getCreatorAlertBody()) : undefined;
@@ -459,6 +462,8 @@ function renderCreatorPlatformDefaults(view) {
       timer = setTimeout(() => void flush(), 650);
     }
     const control = bindCreatorAvatar(field, label + ' default avatar', scheduleSave);
+    setCreatorAvatarControls(field, view.customWebhookAvatars);
+    field.querySelector('.creator-avatar-premium-help').classList.toggle('hidden', Boolean(view.customWebhookAvatars));
     control.url.id = 'creator-platform-avatar-' + platform;
     control.url.setAttribute('aria-label', label + ' webhook avatar URL');
     control.setValue(savedAvatar);
@@ -546,6 +551,23 @@ async function flushCreatorAlertSettings(reportValidity = false) {
   return results.every(Boolean);
 }
 
+function setCreatorAvatarControls(field, enabled) {
+  field.querySelector('.creator-alert-avatar-controls').querySelectorAll('input[type="url"], input[type="file"], button').forEach(control => {
+    control.disabled = !enabled;
+  });
+}
+
+function updateCreatorAvatarAvailability(view) {
+  const enabled = Boolean(view.customWebhookAvatars);
+  setCreatorAvatarControls($('#creator-alert-avatar-url').closest('.creator-alert-avatar-field'), enabled);
+  $('#creator-alert-avatar-url').closest('.creator-alert-avatar-field').querySelector('.creator-alert-avatar-help').textContent = enabled
+    ? 'Leave blank to use the platform default.' : 'Custom webhook avatars require Premium.';
+  creatorPlatformAvatarFields.querySelectorAll('.creator-alert-avatar-field').forEach(field => {
+    setCreatorAvatarControls(field, enabled);
+    field.querySelector('.creator-avatar-premium-help').classList.toggle('hidden', enabled);
+  });
+}
+
 function selectCreatorAlert(view, id) {
   const alert = view.alerts.find(alert => alert.id === id);
   creatorAlertSaved.value = alert ? String(alert.id) : '';
@@ -574,6 +596,8 @@ async function loadCreatorAlerts() {
     $('#creator-alert-preview').classList.toggle('hidden', !view.preview);
     renderCreatorAlerts(view);
     renderCreatorPlatformDefaults(view);
+    updateCreatorAvatarAvailability(view);
+    selectCreatorAlert(view);
     setCreatorAlertBusy(false);
     updateCreatorAlertSavedHelp(view);
     creatorAlertStatus.textContent = '';
@@ -2599,6 +2623,10 @@ function applyPremiumStatus(premium) {
   const previous = state.data.premium;
   if (JSON.stringify(previous) === JSON.stringify(premium)) return;
   state.data.premium = premium;
+  if (creatorAlertView?.guildId === state.guildId) {
+    creatorAlertView.customWebhookAvatars = premium.active;
+    updateCreatorAvatarAvailability(creatorAlertView);
+  }
   renderPremium();
   if (previous.systemLimit !== premium.systemLimit) {
     renderSystemSelect();

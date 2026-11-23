@@ -233,6 +233,7 @@ app.get(creatorAlertsPath, requireUser, canManage, (req, res) => {
     channels, alerts: listCreatorAlerts(guild.id), platformAvatars: listCreatorPlatformAvatars(guild.id),
     platformColors: listCreatorPlatformColors(guild.id), platformColorDefaults: creatorPlatformColorDefaults,
     limit: premiumStatus(guild.id).creatorAlertLimit,
+    customWebhookAvatars: premiumStatus(guild.id).active,
     preview: localGuilds.has(guild.id)
   });
 });

@@ -2,6 +2,7 @@ import { type Client, type Guild, PermissionFlagsBits, ChannelType, MessageFlags
 import { db } from "./db.js";
 import { composeV2Container } from "./embed-composer.js";
 import { premiumStatus } from "./premium.js";
+import { config } from "./config.js";
 
 const platforms = ["youtube", "twitch", "instagram", "tiktok"] as const;
 type Platform = typeof platforms[number];
@@ -249,6 +250,7 @@ export function saveCreatorPlatformAvatar(guildId: string, platform: string, val
   if (!platforms.includes(platform as Platform)) throw new Error("Choose a platform.");
   if (typeof value !== "string") throw new Error("Enter an HTTPS avatar URL or upload an image.");
   const avatar = validateCreatorAvatar(value);
+  if (!premiumStatus(guildId).active) throw new Error("Custom webhook avatars require Premium.");
   if (avatar) {
     db.prepare(`INSERT INTO creator_alert_platform_avatars (guild_id, platform, avatar) VALUES (?, ?, ?)
       ON CONFLICT(guild_id, platform) DO UPDATE SET avatar = excluded.avatar`).run(guildId, platform, avatar);
@@ -317,6 +319,9 @@ export async function saveCreatorAlert(guild: Guild, body: Record<string, unknow
   const avatar = validateCreatorAvatar(typeof body.avatar === "string" ? body.avatar : "");
   const previous = id === undefined ? undefined : db.prepare("SELECT * FROM creator_alerts WHERE guild_id = ? AND id = ?").get(guild.id, id) as Alert | undefined;
   if (id !== undefined && !previous) throw new Error("This alert no longer exists.");
+  if (!premiumStatus(guild.id).active && avatar !== (previous?.avatar ?? "")) {
+    throw new Error("Changing custom webhook avatars requires Premium.");
+  }
   const limitError = (limit: number) => new Error(`This server has reached its limit of ${limit} Creator Alerts. Remove alerts until you are below the limit.`);
   if (!previous) {
     const { creatorAlertLimit } = premiumStatus(guild.id);
@@ -378,6 +383,7 @@ function creatorAlertEmbed(alert: Alert, post: Post) {
     title: defaultHeading ?? (alert.platform === "twitch" ? "Twitch stream" : `${platform} post`),
     url: post.url,
     color,
+    footer: { text: `Message by <@${config.clientId}>` },
     ...(description ? { description } : {}),
     ...(previewUrl && /^https?:\/\//i.test(previewUrl) ? { image: { url: previewUrl } } : {})
   };
@@ -432,7 +438,7 @@ async function sendAlert(guild: Guild, alert: Alert, post: Post) {
       withComponents: true,
       components: [composeV2Container(creatorAlertEmbed(current, post), true)],
       username: current.name || "Creator Alerts", avatarURL: uploadedAvatar ? undefined : avatar || undefined,
-      allowedMentions: { parse: [] }
+      allowedMentions: { users: [config.clientId] }
     });
     db.prepare(`INSERT OR IGNORE INTO creator_alert_sent (alert_id, post_id)
       SELECT id, ? FROM creator_alerts WHERE id = ? AND started = ?`).run(post.id, alert.id, alert.started);
